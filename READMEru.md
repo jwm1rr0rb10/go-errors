@@ -16,9 +16,9 @@
 - Полный набор примеров в godoc и поведение, тщательно проверенное табличными тестами
 - Никаких неожиданностей с выделением памяти во время выполнения (runtime)
 
-## Installation
+## Установка
 
-If this package lives inside your own module:
+Если этот пакет находится внутри вашего собственного модуля:
 
 ```bash
 go get -u github.com/jwm1rr0rb10/go-errors
@@ -26,7 +26,7 @@ go get -u github.com/jwm1rr0rb10/go-errors
 
 ---
 
-## Quick Start
+## Быстрый старт
 
 ```go
 package main
@@ -39,30 +39,30 @@ import (
 func main() {
     err1 := errors.New("permission denied")
     err2 := errors.New("disk full")
-
-    // Combine multiple errors
+	
+	// Объединение нескольких ошибок
     err := errors.Append(err1, err2)
     fmt.Println(err)
-    // Output:
-    // 2 errors occurred:
-    //   - permission denied
-    //   - disk full
+	// Вывод:
+	// Произошло 2 ошибки:
+	//   - отказано в доступе
+	//   - диск заполнен
 
-    // Add context to everything
+	// Добавить контекст ко всему
     err = errors.Prefix(err, "backup failed")
     fmt.Println(err)
-    // Output:
-    // 2 errors occurred:
-    //   - backup failed: permission denied
-    //   - backup failed: disk full
+	// Вывод:
+	// Произошло 2 ошибки:
+	//   - сбой резервного копирования: отказано в доступе
+	//   - сбой резервного копирования: диск заполнен
 
-    // Causal wrapping (the stdlib way)
+	// Оборачивание с указанием причины (подход стандартной библиотеки)
     dbErr := errors.New("connection refused")
     err = errors.Wrapf(dbErr, "failed to connect to %s:%d", "db.example.com", 5432)
     fmt.Println(err)
-    // Output: failed to connect to db.example.com:5432: connection refused
+	// Вывод: не удалось подключиться к db.example.com:5432: соединение отклонено
 
-    // Check errors the normal way
+	// Проверка ошибок стандартным способом
     if errors.Is(err, dbErr) {
         fmt.Println("original db error is still in the chain")
     }
@@ -70,29 +70,29 @@ func main() {
 ```
 
 ## API Overview
-| Function                                             | Description                                                  |
-|:-----------------------------------------------------|:-------------------------------------------------------------|
-| New(msg string) error                                | Same as errors.New (never returns nil)                       |
-| "Errorf(format string, args ...any) error"           | Same as fmt.Errorf                                           |
-| "Wrap(err error, msg string) error"                  | Wrap with context (nil → nil)                                |
-| "Wrapf(err error, format string, args ...any) error" | Formatted wrap (nil → nil)                                   |
-| "Append(err error, errs ...error) error"             | Multi-error builder (nil if all nil)                         |
-| Join(errs ...error) error                            | Alias for errors.Join                                        |
-| Flatten(err error) error                             | Collapse single-error multi-errors                           |
-| "Prefix(err error, prefix string) error"             | Add prefix to every error inside                             |
-| "WithMessage(err error, msg string) error"           | Add sibling message (like old Combine)                       |
-| Errors(err error) []error,                           | Extract all underlying errors                                |
-| "Is, As, Unwrap"                                     | Re-exported stdlib helpers|
+| Function                                             | Description                            |
+|:-----------------------------------------------------|:---------------------------------------|
+| New(msg string) error                                | Same as errors.New (never returns nil) |
+| "Errorf(format string, args ...any) error"           | Same as fmt.Errorf                     |
+| "Wrap(err error, msg string) error"                  | Wrap with context (nil → nil)          |
+| "Wrapf(err error, format string, args ...any) error" | Formatted wrap (nil → nil)             |
+| "Append(err error, errs ...error) error"             | Multi-error builder (nil if all nil)   |
+| Join(errs ...error) error                            | Alias for errors.Join                  |
+| Flatten(err error) error                             | Collapse single-error multi-errors     |
+| "Prefix(err error, prefix string) error"             | Add prefix to every error inside       |
+| "WithMessage(err error, msg string) error"           | Add sibling message (like old Combine) |
+| Errors(err error) []error,                           | Extract all underlying errors          |
+| "Is, As, Unwrap"                                     | Re-exported stdlib helpers             |
 
 ---
 
-## Why this library?
+## Почему именно эта библиотека?
 
-- **No dependency hell** — unlike `go-multierror` or `multierr`
-- **Modern Go** — fully leverages Go 1.20+ `errors.Join` and `%w` unwrapping
-- **Better UX** than both HashiCorp and Uber versions
-- **Beautiful output** — multi-errors print cleanly by default
-- **Zero surprises** — every function has clear, documented nil-handling
+- **Никакого «ада зависимостей»** — в отличие от `go-multierror` или `multierr`
+- **Современный Go** — в полной мере использует возможности Go 1.20+, включая `errors.Join` и распаковку ошибок через `%w`
+- **Улучшенный UX** — превосходит по удобству использования аналоги от HashiCorp и Uber
+- **Эстетичный вывод** — по умолчанию составные ошибки выводятся в консоль в аккуратном, читаемом формате
+- **Никаких сюрпризов** — поведение каждой функции при обработке `nil` четко определено и задокументировано
 
 ---
 
