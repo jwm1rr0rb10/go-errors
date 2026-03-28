@@ -101,3 +101,10 @@ func main() {
 errors.Combine(err, msg) → errors.WithMessage(err, msg)
 errors.New("") now returns a real error (matching stdlib)
 All your existing Append/Prefix/Flatten calls continue to work exactly as before
+
+---
+
+## License
+[MIT License](https://github.com/jwm1rr0rb10/go-metrics/blob/main/LICENSE) – © Raman Zaitsau [@jwm1rrr0rb10](https://github.com/jwm1rr0rb10)
+
+Made with ❤️ for cleaner Go error handling
