@@ -4,11 +4,21 @@
 // It is 100% dependency-free and works perfectly with the standard
 // library's errors package (Go 1.20+). Multi-errors support errors.Is,
 // errors.As, and errors.Unwrap out of the box.
+//
+// # Errors vs Leaves
+//
+// Errors returns the top-level items inside a multi-error or stdlib joined
+// error. For a single fmt.Errorf("%w") chain it returns the outer wrapper as
+// one element — not the inner cause.
+//
+// Leaves walks each extracted item to the root of its %w chain. Use Leaves
+// when you need every underlying cause (for example, logging or Sentry).
 package errors
 
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -26,15 +36,39 @@ func (m multiError) Error() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%d errors occurred:\n", len(m)))
+	b.WriteString(strconv.Itoa(len(m)))
+	b.WriteString(" errors occurred:\n")
 	for i, err := range m {
 		if i > 0 {
-			b.WriteString("\n")
+			b.WriteByte('\n')
 		}
 		b.WriteString("  - ")
 		b.WriteString(err.Error())
 	}
 	return b.String()
+}
+
+func (m multiError) Format(s fmt.State, verb rune) {
+	switch verb {
+	case 'v':
+		if s.Flag('+') {
+			if len(m) == 1 {
+				fmt.Fprintf(s, "%+v", m[0])
+				return
+			}
+
+			for i, err := range m {
+				if i > 0 {
+					fmt.Fprint(s, "\n")
+				}
+				fmt.Fprint(s, "  - ")
+				fmt.Fprintf(s, "%+v", err)
+			}
+			return
+		}
+	}
+
+	fmt.Fprint(s, m.Error())
 }
 
 func (m multiError) Unwrap() []error { return m }
@@ -60,6 +94,8 @@ func Wrap(err error, msg string) error {
 
 // Wrapf wraps err with a formatted message.
 // If err is nil, returns nil.
+// format must not contain %w (the wrapper is appended automatically).
+// Literal percent signs must be escaped as %%.
 func Wrapf(err error, format string, args ...any) error {
 	if err == nil {
 		return nil
@@ -68,26 +104,36 @@ func Wrapf(err error, format string, args ...any) error {
 }
 
 // Append combines multiple errors into a multi-error.
+// Nested multi-errors and joined errors are flattened.
 // Returns nil if all errors are nil.
 func Append(err error, errs ...error) error {
 	return joinNonNil(append([]error{err}, errs...)...)
 }
 
-// Join is an alias for errors.Join (stdlib).
+// Join combines multiple errors into a multi-error.
+// Unlike [errors.Join], nested multi-errors and stdlib joined errors are
+// flattened into a single level (same behavior as Append).
+// Returns nil if all errors are nil.
 func Join(errs ...error) error {
-	return errors.Join(errs...)
+	return joinNonNil(errs...)
 }
 
-// Flatten returns a single error if the multi-error contains only one error.
+// Flatten returns a single error if err contains only one underlying error.
 // Otherwise returns the multi-error unchanged.
 func Flatten(err error) error {
 	if err == nil {
 		return nil
 	}
-	if m, ok := err.(multiError); ok && len(m) == 1 {
-		return m[0]
+
+	errs := extractErrors(err)
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		return joinNonNil(errs...)
 	}
-	return err
 }
 
 // Prefix adds the same prefix to every error inside err
@@ -97,29 +143,49 @@ func Prefix(err error, prefix string) error {
 		return nil
 	}
 
-	// If it's already a multi-error, prefix every inner error
-	if m, ok := err.(multiError); ok {
-		newErrs := make(multiError, len(m))
-		for i, e := range m {
-			newErrs[i] = Wrap(e, prefix)
-		}
-		return newErrs
-	}
-
-	// Single error
-	return Wrap(err, prefix)
-}
-
-// Errors returns the list of underlying errors.
-// If err is not a multi-error, returns a single-element slice.
-func Errors(err error) []error {
-	if err == nil {
+	errs := extractErrors(err)
+	if len(errs) == 0 {
 		return nil
 	}
-	if m, ok := err.(multiError); ok {
-		return m
+
+	prefixed := make([]error, len(errs))
+	for i, e := range errs {
+		prefixed[i] = Wrap(e, prefix)
 	}
-	return []error{err}
+
+	return joinNonNil(prefixed...)
+}
+
+// Errors returns the top-level items inside err.
+// Multi-errors and values produced by [errors.Join] are flattened one level.
+// A single fmt.Errorf("%w") chain is returned as a one-element slice
+// containing the outer wrapper. Use [Leaves] to reach root causes.
+func Errors(err error) []error {
+	return extractErrors(err)
+}
+
+// Leaves returns the root cause of each item returned by [Errors].
+// For multi-errors this is one leaf per sibling; for a lone %w chain it is
+// the innermost wrapped error.
+func Leaves(err error) []error {
+	errs := extractErrors(err)
+	if len(errs) == 0 {
+		return nil
+	}
+
+	leaves := make([]error, 0, len(errs))
+	for _, e := range errs {
+		if leaf := leafError(e); leaf != nil {
+			leaves = append(leaves, leaf)
+		}
+	}
+
+	return leaves
+}
+
+// Count returns the number of top-level errors contained in err (see [Errors]).
+func Count(err error) int {
+	return len(extractErrors(err))
 }
 
 // WithMessage adds msg as a sibling error.
@@ -136,14 +202,57 @@ func Unwrap(err error) error        { return errors.Unwrap(err) }
 func Is(err, target error) bool     { return errors.Is(err, target) }
 func As(err error, target any) bool { return errors.As(err, target) }
 
+func leafError(err error) error {
+	// Protect against cyclic unwrap chains (possible with custom error types).
+	// Matches the approach used by the standard library's errors.Is / errors.As.
+	visited := make(map[error]struct{})
+	for err != nil {
+		if _, ok := visited[err]; ok {
+			// Cycle detected: return the error at the point of re-entry.
+			return err
+		}
+		visited[err] = struct{}{}
+
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err
+		}
+		err = next
+	}
+
+	return nil
+}
+
+// extractErrors returns the top-level items inside err (see [Errors]).
+func extractErrors(err error) []error {
+	if err == nil {
+		return nil
+	}
+
+	if m, ok := err.(multiError); ok {
+		return append([]error(nil), m...)
+	}
+
+	if u, ok := err.(interface{ Unwrap() []error }); ok {
+		if errs := u.Unwrap(); len(errs) > 0 {
+			return append([]error(nil), errs...)
+		}
+	}
+
+	return []error{err}
+}
+
 // joinNonNil is the internal helper that builds our multiError.
 func joinNonNil(errs ...error) error {
 	var nonNil []error
 	for _, err := range errs {
-		if err != nil {
-			nonNil = append(nonNil, err)
+		for _, extracted := range extractErrors(err) {
+			if extracted != nil {
+				nonNil = append(nonNil, extracted)
+			}
 		}
 	}
+
 	switch len(nonNil) {
 	case 0:
 		return nil
