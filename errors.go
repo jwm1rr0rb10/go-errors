@@ -22,6 +22,8 @@ import (
 	"strings"
 )
 
+const maxUnwrapDepth = 100 // защита от бесконечных циклов
+
 // multiError is our internal multi-error type. It implements the
 // same Unwrap() []error convention that errors.Join uses, so stdlib
 // functions work seamlessly.
@@ -34,7 +36,6 @@ func (m multiError) Error() string {
 	if len(m) == 1 {
 		return m[0].Error()
 	}
-
 	var b strings.Builder
 	b.WriteString(strconv.Itoa(len(m)))
 	b.WriteString(" errors occurred:\n")
@@ -56,7 +57,6 @@ func (m multiError) Format(s fmt.State, verb rune) {
 				fmt.Fprintf(s, "%+v", m[0])
 				return
 			}
-
 			for i, err := range m {
 				if i > 0 {
 					fmt.Fprint(s, "\n")
@@ -67,7 +67,6 @@ func (m multiError) Format(s fmt.State, verb rune) {
 			return
 		}
 	}
-
 	fmt.Fprint(s, m.Error())
 }
 
@@ -94,13 +93,13 @@ func Wrap(err error, msg string) error {
 
 // Wrapf wraps err with a formatted message.
 // If err is nil, returns nil.
-// format must not contain %w (the wrapper is appended automatically).
-// Literal percent signs must be escaped as %%.
+// format may contain any verbs; %w is added automatically and safely.
 func Wrapf(err error, format string, args ...any) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf(format+": %w", append(args, err)...)
+	msg := fmt.Sprintf(format, args...)
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 // Append combines multiple errors into a multi-error.
@@ -124,7 +123,6 @@ func Flatten(err error) error {
 	if err == nil {
 		return nil
 	}
-
 	errs := extractErrors(err)
 	switch len(errs) {
 	case 0:
@@ -142,17 +140,14 @@ func Prefix(err error, prefix string) error {
 	if err == nil {
 		return nil
 	}
-
 	errs := extractErrors(err)
 	if len(errs) == 0 {
 		return nil
 	}
-
 	prefixed := make([]error, len(errs))
 	for i, e := range errs {
 		prefixed[i] = Wrap(e, prefix)
 	}
-
 	return joinNonNil(prefixed...)
 }
 
@@ -172,14 +167,12 @@ func Leaves(err error) []error {
 	if len(errs) == 0 {
 		return nil
 	}
-
 	leaves := make([]error, 0, len(errs))
 	for _, e := range errs {
 		if leaf := leafError(e); leaf != nil {
 			leaves = append(leaves, leaf)
 		}
 	}
-
 	return leaves
 }
 
@@ -197,46 +190,82 @@ func WithMessage(err error, msg string) error {
 	return Append(err, New(msg))
 }
 
+// IsAny reports whether any of the targets is present in err's chain
+// (including multi-error siblings).
+func IsAny(err error, targets ...error) bool {
+	for _, t := range targets {
+		if Is(err, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// AsAny finds the first target that matches in err's chain
+// (including multi-error siblings) and stores it.
+// Returns true if any target matched.
+func AsAny(err error, targets ...any) bool {
+	for _, t := range targets {
+		if As(err, t) {
+			return true
+		}
+	}
+	return false
+}
+
 // Unwrap, Is, and As are re-exported for convenience.
 func Unwrap(err error) error        { return errors.Unwrap(err) }
 func Is(err, target error) bool     { return errors.Is(err, target) }
 func As(err error, target any) bool { return errors.As(err, target) }
 
 func leafError(err error) error {
-	// Protect against cyclic unwrap chains (possible with custom error types).
-	// Matches the approach used by the standard library's errors.Is / errors.As.
 	visited := make(map[error]struct{})
-	for err != nil {
+	for depth := 0; err != nil && depth < maxUnwrapDepth; depth++ {
 		if _, ok := visited[err]; ok {
-			// Cycle detected: return the error at the point of re-entry.
-			return err
+			return err // cycle detected
 		}
 		visited[err] = struct{}{}
-
 		next := errors.Unwrap(err)
 		if next == nil {
 			return err
 		}
 		err = next
 	}
-
-	return nil
+	return err // depth exceeded or nil
 }
 
 // extractErrors returns the top-level items inside err (see [Errors]).
+// Protected against cycles and pathological Unwrap implementations.
 func extractErrors(err error) []error {
 	if err == nil {
 		return nil
 	}
 
+	// Fast path for our own type
 	if m, ok := err.(multiError); ok {
 		return append([]error(nil), m...)
 	}
 
+	// Stdlib Join / any type that implements Unwrap() []error
 	if u, ok := err.(interface{ Unwrap() []error }); ok {
-		if errs := u.Unwrap(); len(errs) > 0 {
-			return append([]error(nil), errs...)
+		errs := u.Unwrap()
+		if len(errs) == 0 {
+			return nil
 		}
+		// Защита от "Unwrap returns self"
+		out := make([]error, 0, len(errs))
+		seen := make(map[error]struct{})
+		for _, e := range errs {
+			if e == nil {
+				continue
+			}
+			if _, ok := seen[e]; ok {
+				continue // cycle / duplicate
+			}
+			seen[e] = struct{}{}
+			out = append(out, e)
+		}
+		return out
 	}
 
 	return []error{err}
@@ -245,11 +274,18 @@ func extractErrors(err error) []error {
 // joinNonNil is the internal helper that builds our multiError.
 func joinNonNil(errs ...error) error {
 	var nonNil []error
+	seen := make(map[error]struct{})
+
 	for _, err := range errs {
 		for _, extracted := range extractErrors(err) {
-			if extracted != nil {
-				nonNil = append(nonNil, extracted)
+			if extracted == nil {
+				continue
 			}
+			if _, ok := seen[extracted]; ok {
+				continue
+			}
+			seen[extracted] = struct{}{}
+			nonNil = append(nonNil, extracted)
 		}
 	}
 
