@@ -1,7 +1,9 @@
 package errors
 
 import (
+	stderrors "errors"
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -91,4 +93,125 @@ func FuzzJoinAppendFlatten(f *testing.F) {
 		// WithMessage should work
 		_ = WithMessage(joined, "extra")
 	})
+}
+
+// buildTree turns fuzz bytes into an arbitrary error tree mixing comparable
+// and non-comparable error types, stdlib joins, fmt wrapping and this
+// package's multi-errors.
+func buildTree(data []byte, pos *int, depth int) error {
+	if *pos >= len(data) || depth > 6 {
+		return nil
+	}
+	op := data[*pos]
+	*pos++
+	switch op % 10 {
+	case 0:
+		return nil
+	case 1:
+		return New(fmt.Sprintf("leaf-%d", op))
+	case 2:
+		return validationErrors{fmt.Sprintf("v-%d", op)} // slice: not comparable
+	case 3:
+		return fieldErr{fields: map[string]string{"k": "v"}} // map inside
+	case 4:
+		return Wrap(buildTree(data, pos, depth+1), "wrap")
+	case 5:
+		return fmt.Errorf("fmt: %w", buildTree(data, pos, depth+1))
+	case 6:
+		return stderrors.Join(buildTree(data, pos, depth+1), buildTree(data, pos, depth+1))
+	case 7:
+		return Join(buildTree(data, pos, depth+1), buildTree(data, pos, depth+1))
+	case 8:
+		return Append(buildTree(data, pos, depth+1), buildTree(data, pos, depth+1), buildTree(data, pos, depth+1))
+	default:
+		inner := buildTree(data, pos, depth+1)
+		if inner == nil {
+			return nil
+		}
+		return valueWrapper{err: inner} // comparable struct holding any error
+	}
+}
+
+func FuzzErrorTrees(f *testing.F) {
+	f.Add([]byte{7, 2, 3})
+	f.Add([]byte{4, 7, 1, 2})
+	f.Add([]byte{6, 7, 1, 1, 7, 1, 1})
+	f.Add([]byte{9, 8, 2, 2, 3})
+	f.Add([]byte{5, 6, 8, 1, 2, 3, 9, 7, 2, 3})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		pos := 0
+		a := buildTree(data, &pos, 0)
+		b := buildTree(data, &pos, 0)
+		c := buildTree(data, &pos, 0)
+
+		joined := Join(a, b, c)
+		appended := Append(Append(a, b), c)
+
+		// Join and Append agree, and nothing is lost or deduplicated.
+		want := Count(a) + Count(b) + Count(c)
+		if Count(joined) != want || Count(appended) != want {
+			t.Fatalf("count: join=%d append=%d want=%d", Count(joined), Count(appended), want)
+		}
+		if (joined == nil) != (want == 0) {
+			t.Fatalf("nil mismatch: joined=%v want=%d", joined, want)
+		}
+		if joined != nil && joined.Error() != appended.Error() {
+			t.Fatalf("message mismatch:\n%q\n%q", joined.Error(), appended.Error())
+		}
+
+		// Every top-level item of every input (multi-errors are flattened)
+		// is still found by errors.Is, if it can be compared at all.
+		for _, in := range []error{a, b, c} {
+			for _, e := range Errors(in) {
+				if reflect.TypeOf(e).Comparable() && isSafeComparable(e) && !Is(joined, e) {
+					t.Fatalf("errors.Is lost %v", e)
+				}
+			}
+		}
+		var ve validationErrors
+		if hasType[validationErrors](a, b, c) && !As(joined, &ve) {
+			t.Fatal("errors.As lost validationErrors")
+		}
+
+		// None of these may panic, and results never contain nil.
+		for _, l := range Leaves(joined) {
+			if l == nil {
+				t.Fatal("nil leaf")
+			}
+			if Count(l) > 1 {
+				t.Fatalf("leaf is a multi-error: %v", l)
+			}
+		}
+		for _, e := range Errors(joined) {
+			if e == nil {
+				t.Fatal("nil in Errors")
+			}
+		}
+		_ = Flatten(joined)
+		_ = Prefix(joined, "p")
+		_ = WithMessage(joined, "m")
+		_ = fmt.Sprintf("%v %+v %s %q", joined, joined, joined, joined)
+	})
+}
+
+// isSafeComparable reports whether e == e cannot panic (comparable type
+// whose interface fields do not hold non-comparable values).
+func isSafeComparable(e error) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	return e == e
+}
+
+func hasType[T error](errs ...error) bool {
+	for _, e := range errs {
+		var target T
+		if e != nil && stderrors.As(e, &target) {
+			return true
+		}
+	}
+	return false
 }
