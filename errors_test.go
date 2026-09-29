@@ -272,8 +272,8 @@ func TestMultiErrorSupportsStdlibAs(t *testing.T) {
 	}
 }
 
-func TestWithMessage(t *testing.T) {
-	err := WithMessage(New("original"), "extra")
+func TestAppendMessage(t *testing.T) {
+	err := AppendMessage(New("original"), "extra")
 	got := Errors(err)
 
 	if len(got) != 2 {
@@ -343,8 +343,8 @@ func TestReexportedHelpers(t *testing.T) {
 	}
 }
 
-func TestWithMessageNilErr(t *testing.T) {
-	err := WithMessage(nil, "solo")
+func TestAppendMessageNilErr(t *testing.T) {
+	err := AppendMessage(nil, "solo")
 	if err == nil || err.Error() != "solo" {
 		t.Fatalf("expected plain error, got %v", err)
 	}
@@ -380,19 +380,19 @@ type cyclicErr struct {
 func (e *cyclicErr) Error() string { return e.msg }
 func (e *cyclicErr) Unwrap() error { return e.next }
 
-func TestLeafErrorCycle(t *testing.T) {
+func TestLeavesCycle(t *testing.T) {
 	// Create a cyclic error chain: a unwraps to b, b unwraps to a.
 	a := &cyclicErr{msg: "a"}
 	b := &cyclicErr{msg: "b", next: a}
 	a.next = b
 
-	got := leafError(a)
-	if got == nil {
-		t.Fatal("leafError returned nil on cyclic chain")
+	got := Leaves(a)
+	if len(got) != 1 {
+		t.Fatalf("Leaves on cyclic chain = %v, want one leaf", got)
 	}
 	// It should return one of the cycle members.
-	if got != a && got != b {
-		t.Fatalf("unexpected leaf: %v", got)
+	if got[0] != a && got[0] != b {
+		t.Fatalf("unexpected leaf: %v", got[0])
 	}
 }
 

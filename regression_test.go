@@ -55,7 +55,7 @@ func TestNonComparableErrorsDoNotPanic(t *testing.T) {
 		"Leaves(value wrapper x2)":          func() { _ = Leaves(Join(vw, valueWrapper{err: vw})) },
 		"Prefix(Join(slice, map-struct))":   func() { _ = Prefix(Join(v, f), "p") },
 		"Count/Errors(Join(slice, slice))":  func() { _ = Count(Join(v, v)) + len(Errors(Join(v, v))) },
-		"WithMessage(slice error)":          func() { _ = WithMessage(v, "m") },
+		"AppendMessage(slice error)":        func() { _ = AppendMessage(v, "m") },
 		"IsAny/AsAny with slice error":      func() { var x validationErrors; _ = IsAny(Join(v, a), a) && AsAny(Join(v, a), &x) },
 		"Leaves(stdlib.Join(multi, multi))": func() { _ = Leaves(stderrors.Join(Join(a, b), Join(a, b))) },
 	}

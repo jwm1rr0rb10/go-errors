@@ -27,11 +27,18 @@
 //
 // Like errors.Join, nothing is deduplicated: joining the same error twice
 // keeps both, so the count of failures is preserved.
+//
+// # Single-line messages
+//
+// The Error method of a multi-error spans several lines. For plain-text logs
+// and metrics labels use Oneline, which renders any error tree on one line:
+// "sync failed: timeout; dial: connection refused".
 package errors
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -102,25 +109,63 @@ func (m *multiError) Format(s fmt.State, verb rune) {
 			}
 			return
 		}
-		fmt.Fprint(s, m.Error())
-	case 'q':
-		fmt.Fprintf(s, "%q", m.Error())
-	default:
-		fmt.Fprint(s, m.Error())
+		verb = 's'
 	}
+	formatString(s, verb, m.Error())
 }
 
 // Unwrap returns the contained errors. The slice must not be modified.
-func (m *multiError) Unwrap() []error { return m.errs }
+//
+// The capacity of the returned slice equals its length, so appending to it
+// always copies and can never overwrite errors of another multi-error that
+// shares the backing array.
+func (m *multiError) Unwrap() []error { return m.errs[:len(m.errs):len(m.errs)] }
 
 // wrapError is the type returned by Wrap and Wrapf. It is cheaper than
 // fmt.Errorf("%s: %w", ...): one allocation, no format parsing.
+//
+// The message is built lazily, so errors that are only checked with
+// errors.Is / errors.As and never printed cost nothing extra.
 type wrapError struct {
 	msg string
 	err error
 }
 
-func (w *wrapError) Error() string { return w.msg + ": " + w.err.Error() }
+// Error returns "msg: cause". A chain of Wrap calls is rendered in one pass
+// with a single allocation, in time linear in the length of the message.
+// (Concatenating level by level would allocate once per level and copy
+// O(depth²) bytes.)
+func (w *wrapError) Error() string {
+	// wrapError values are immutable and can only wrap errors that already
+	// exist, so a chain of them cannot form a cycle.
+	n := 0
+	var tail error = w
+	for {
+		ww, ok := tail.(*wrapError)
+		if !ok {
+			break
+		}
+		n += len(ww.msg) + len(": ")
+		tail = ww.err
+	}
+	tailMsg := tail.Error()
+
+	var b strings.Builder
+	b.Grow(n + len(tailMsg))
+	// Walk by type assertion only: comparing error values (e != tail) would
+	// panic when the root cause has a non-comparable dynamic type.
+	for e := error(w); ; {
+		ww, ok := e.(*wrapError)
+		if !ok {
+			break
+		}
+		b.WriteString(ww.msg)
+		b.WriteString(": ")
+		e = ww.err
+	}
+	b.WriteString(tailMsg)
+	return b.String()
+}
 
 func (w *wrapError) Unwrap() error { return w.err }
 
@@ -133,12 +178,30 @@ func (w *wrapError) Format(s fmt.State, verb rune) {
 			fmt.Fprintf(s, "%s: %+v", w.msg, w.err)
 			return
 		}
-		fmt.Fprint(s, w.Error())
-	case 'q':
-		fmt.Fprintf(s, "%q", w.Error())
-	default:
-		fmt.Fprint(s, w.Error())
+		verb = 's'
 	}
+	formatString(s, verb, w.Error())
+}
+
+// formatString prints msg with the verb, flags, width and precision of the
+// current directive, so %q, %x, %X, %-20s and so on behave as they do for
+// plain errors.
+func formatString(s fmt.State, verb rune, msg string) {
+	if verb == 's' && !hasFlagsOrWidth(s) {
+		_, _ = io.WriteString(s, msg)
+		return
+	}
+	fmt.Fprintf(s, fmt.FormatString(s, verb), msg)
+}
+
+func hasFlagsOrWidth(s fmt.State) bool {
+	if _, ok := s.Width(); ok {
+		return true
+	}
+	if _, ok := s.Precision(); ok {
+		return true
+	}
+	return s.Flag('-') || s.Flag('+') || s.Flag('#') || s.Flag(' ') || s.Flag('0')
 }
 
 // New creates a new error with the given message (never returns nil).
@@ -179,6 +242,10 @@ func Wrapf(err error, format string, args ...any) error {
 // Appending to a multi-error in a loop (err = Append(err, e)) is amortized
 // O(1) per call, and results of appending to the same value never share
 // state, so it is safe to append to one base from several goroutines.
+//
+// Each call still allocates a new multi-error value. On hot paths, collect
+// errors in a []error and call Join once: it allocates only for the slice
+// growth and the final value.
 func Append(err error, errs ...error) error {
 	if m, ok := err.(*multiError); ok && len(errs) > 0 {
 		return m.append(errs)
@@ -283,17 +350,128 @@ func Count(err error) int {
 	return countOne(err)
 }
 
-// WithMessage adds msg as a separate, sibling error: the result is a
+// AppendMessage adds msg as a separate, sibling error: the result is a
 // multi-error of err and a new error with msg. If err is nil, it returns a
-// plain error with msg.
-//
-// Note: this differs from pkg/errors.WithMessage, which wraps. To add
-// context to err (causal wrapping), use Wrap.
-func WithMessage(err error, msg string) error {
+// plain error with msg. To add context to err (causal wrapping), use Wrap.
+func AppendMessage(err error, msg string) error {
 	if err == nil {
 		return New(msg)
 	}
 	return Append(err, New(msg))
+}
+
+// WithMessage is AppendMessage.
+//
+// Deprecated: the name suggests the behavior of pkg/errors.WithMessage,
+// which wraps err, while this function adds a sibling error. Use
+// AppendMessage for the same behavior, or Wrap to add context.
+func WithMessage(err error, msg string) error {
+	return AppendMessage(err, msg)
+}
+
+// Oneline renders err on a single line, for plain-text logs and metrics.
+//
+// Multi-errors (this package's and any Unwrap() []error value, including
+// errors.Join) are rendered as their items separated by "; ", wrapped
+// errors as "context: cause", at any depth:
+//
+//	Wrap(Join(timeout, Wrap(refused, "dial")), "sync failed")
+//	→ "sync failed: timeout; dial: connection refused"
+//
+// Wrappers from other packages, such as fmt.Errorf("ctx: %w", err), are
+// handled when their message ends with the message of the wrapped error.
+// Any line breaks left in other messages are replaced with "; ". The walk
+// is bounded like Leaves, so cyclic or huge error graphs are safe; output
+// that hits the limit ends with "...". Returns "" for nil.
+func Oneline(err error) string {
+	if err == nil {
+		return ""
+	}
+	o := onelineWriter{budget: maxLeavesNodes}
+	o.write(err, 0)
+	return o.b.String()
+}
+
+type onelineWriter struct {
+	b         strings.Builder
+	budget    int
+	truncated bool
+}
+
+func (o *onelineWriter) write(err error, depth int) {
+	if o.truncated {
+		return
+	}
+	o.budget--
+	if o.budget < 0 || depth >= maxUnwrapDepth {
+		o.b.WriteString("...")
+		o.truncated = true
+		return
+	}
+
+	switch e := err.(type) {
+	case *wrapError:
+		o.writeFlat(e.msg)
+		o.b.WriteString(": ")
+		o.write(e.err, depth+1)
+
+	case multiUnwrapper:
+		first := true
+		for _, c := range e.Unwrap() {
+			if c == nil {
+				continue
+			}
+			if !first {
+				o.b.WriteString("; ")
+			}
+			first = false
+			o.write(c, depth+1)
+			if o.truncated {
+				return
+			}
+		}
+		if first { // no non-nil children
+			o.writeFlat(err.Error())
+		}
+
+	case interface{ Unwrap() error }:
+		inner := e.Unwrap()
+		if inner != nil {
+			msg, innerMsg := err.Error(), inner.Error()
+			if prefix, ok := strings.CutSuffix(msg, innerMsg); ok {
+				o.writeFlat(prefix)
+				o.write(inner, depth+1)
+				return
+			}
+			o.writeFlat(msg)
+			return
+		}
+		o.writeFlat(err.Error())
+
+	default:
+		o.writeFlat(err.Error())
+	}
+}
+
+// writeFlat writes msg, replacing line breaks with "; " and dropping
+// blank lines and surrounding spaces.
+func (o *onelineWriter) writeFlat(msg string) {
+	if !strings.ContainsAny(msg, "\r\n") {
+		o.b.WriteString(msg)
+		return
+	}
+	first := true
+	for _, line := range strings.FieldsFunc(msg, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !first {
+			o.b.WriteString("; ")
+		}
+		first = false
+		o.b.WriteString(line)
+	}
 }
 
 // IsAny reports whether any of the targets is present in err's tree
@@ -538,26 +716,4 @@ func singleChainLeaf(err error) (leaf error, ok bool) {
 		}
 	}
 	return nil, false
-}
-
-// leafError follows a single Unwrap() error chain to its root, stopping at
-// cycles and at maxUnwrapDepth.
-func leafError(err error) error {
-	var w leavesWalker
-	for depth := 0; err != nil && depth < maxUnwrapDepth; depth++ {
-		if w.onPath(err) {
-			return err
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return err
-		}
-		next := u.Unwrap()
-		if next == nil {
-			return err
-		}
-		w.path = append(w.path, err)
-		err = next
-	}
-	return err
 }

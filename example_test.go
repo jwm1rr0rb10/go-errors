@@ -11,7 +11,8 @@ func ExampleAppend_loop() {
 	var err error
 	for _, name := range []string{"alice", "", "bob", ""} {
 		if name == "" {
-			// Amortized O(1) per call, safe for thousands of errors.
+			// Amortized O(1) per call. On hot paths prefer collecting
+			// into a []error and calling Join once.
 			err = errors.Append(err, errors.New("empty name"))
 		}
 	}
@@ -61,4 +62,31 @@ func ExampleAs_nonComparableErrors() {
 	var ve validationErrors
 	fmt.Println(errors.As(err, &ve), ve)
 	// Output: true [name is required]
+}
+
+func ExampleOneline() {
+	timeout := errors.New("timeout")
+	refused := errors.New("connection refused")
+	err := errors.Wrap(errors.Join(timeout, errors.Wrap(refused, "dial")), "sync failed")
+
+	fmt.Println(errors.Oneline(err))
+	// Output: sync failed: timeout; dial: connection refused
+}
+
+func ExampleJoin_hotPath() {
+	var errs []error
+	for _, name := range []string{"alice", "", "bob", ""} {
+		if name == "" {
+			errs = append(errs, errors.New("empty name"))
+		}
+	}
+	err := errors.Join(errs...) // nil if nothing failed
+	fmt.Println(errors.Oneline(err))
+	// Output: empty name; empty name
+}
+
+func ExampleAppendMessage() {
+	err := errors.AppendMessage(errors.New("upload failed"), "retry scheduled")
+	fmt.Println(errors.Oneline(err))
+	// Output: upload failed; retry scheduled
 }

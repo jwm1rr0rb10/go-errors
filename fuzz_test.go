@@ -4,6 +4,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -90,8 +91,8 @@ func FuzzJoinAppendFlatten(f *testing.F) {
 			_ = Flatten(Prefix(joined, "pfx"))
 		}
 
-		// WithMessage should work
-		_ = WithMessage(joined, "extra")
+		// AppendMessage should work
+		_ = AppendMessage(joined, "extra")
 	})
 }
 
@@ -190,8 +191,17 @@ func FuzzErrorTrees(f *testing.F) {
 		}
 		_ = Flatten(joined)
 		_ = Prefix(joined, "p")
-		_ = WithMessage(joined, "m")
-		_ = fmt.Sprintf("%v %+v %s %q", joined, joined, joined, joined)
+		_ = AppendMessage(joined, "m")
+		_ = fmt.Sprintf("%v %+v %s %q %x %-10s", joined, joined, joined, joined, joined, joined)
+
+		// Oneline never produces line breaks, whatever the tree looks like.
+		if line := Oneline(joined); strings.ContainsAny(line, "\r\n") {
+			t.Fatalf("Oneline produced a line break: %q", line)
+		}
+		// Error of a Wrap chain matches the level-by-level definition.
+		if w := Wrap(Wrap(joined, "b"), "a"); joined != nil && w.Error() != "a: b: "+joined.Error() {
+			t.Fatalf("Wrap chain message mismatch: %q", w.Error())
+		}
 	})
 }
 

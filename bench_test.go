@@ -97,3 +97,94 @@ func BenchmarkErrorString(b *testing.B) {
 		_ = err.Error()
 	}
 }
+
+var sinkString string
+
+func wrapChain(depth int) error {
+	err := New("connection refused")
+	for i := 0; i < depth; i++ {
+		err = Wrap(err, "handler step")
+	}
+	return err
+}
+
+func fmtChain(depth int) error {
+	err := New("connection refused")
+	for i := 0; i < depth; i++ {
+		err = fmt.Errorf("handler step: %w", err)
+	}
+	return err
+}
+
+func BenchmarkErrorStringWrapChain5(b *testing.B) {
+	err := wrapChain(5)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sinkString = err.Error()
+	}
+}
+
+func BenchmarkErrorStringWrapChain20(b *testing.B) {
+	err := wrapChain(20)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sinkString = err.Error()
+	}
+}
+
+// Typical request path: build a 5-level chain and log it once.
+func BenchmarkCreateAndLogWrap5(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sinkString = wrapChain(5).Error()
+	}
+}
+
+func BenchmarkStdCreateAndLogFmt5(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sinkString = fmtChain(5).Error()
+	}
+}
+
+// Error is only checked with errors.Is and never printed.
+func BenchmarkCreateAndIsWrap5(b *testing.B) {
+	target := New("target")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = Is(wrapChain(5), target)
+	}
+}
+
+func BenchmarkStdCreateAndIsFmt5(b *testing.B) {
+	target := New("target")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = Is(fmtChain(5), target)
+	}
+}
+
+// Recommended hot-path pattern: collect into a slice, Join once.
+func BenchmarkCollectThenJoin1000(b *testing.B) {
+	errs := make([]error, 1000)
+	for i := range errs {
+		errs[i] = fmt.Errorf("e%d", i)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var acc []error
+		for _, e := range errs {
+			acc = append(acc, e)
+		}
+		sinkErr = Join(acc...)
+	}
+}
+
+func BenchmarkOneline(b *testing.B) {
+	err := Wrap(Join(New("timeout"), Wrap(New("connection refused"), "dial")), "sync failed")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sinkString = Oneline(err)
+	}
+}

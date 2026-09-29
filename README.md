@@ -8,12 +8,14 @@ the standard library.
 
 - `New`, `Errorf`, `Wrap`, `Wrapf`, and `Is` / `As` / `Unwrap` / `ErrUnsupported`
   re-exported, so the package can replace `errors` in imports
-- Multi-errors: `Append`, `Join`, `Flatten`, `Prefix`, `WithMessage`, `Errors`, `Count`
+- `Wrap` is about 5× cheaper than `fmt.Errorf("ctx: %w", err)`: one allocation,
+  no format parsing, no stack traces; the message is built only when printed
+- Multi-errors: `Append`, `Join`, `Flatten`, `Prefix`, `AppendMessage`, `Errors`, `Count`
 - `Leaves` finds every root cause, at any depth, including behind wrapped multi-errors
+- `Oneline` renders any error tree on one line for plain-text logs
 - Works with `fmt.Errorf("%w")`, `errors.Is`, `errors.As` and `errors.Join` values
 - Safe with any error type, including non-comparable ones (slices, maps)
-- `err = Append(err, e)` in a loop is amortized O(1)
-- Race-tested, fuzz-tested, 90%+ coverage
+- Race-tested, fuzz-tested in CI, 90%+ coverage
 
 ## Installation
 
@@ -36,24 +38,24 @@ import (
 
 func main() {
 	// Collect errors
-	var err error
-	err = errors.Append(err, errors.New("permission denied"))
-	err = errors.Append(err, errors.New("disk full"))
+	err := errors.Join(errors.New("permission denied"), errors.New("disk full"))
 	fmt.Println(err)
 	// 2 errors occurred:
 	//   - permission denied
 	//   - disk full
 
+	// Same error on one line, for plain-text logs
+	fmt.Println(errors.Oneline(err))
+	// permission denied; disk full
+
 	// Add the same context to every error
-	fmt.Println(errors.Prefix(err, "backup failed"))
-	// 2 errors occurred:
-	//   - backup failed: permission denied
-	//   - backup failed: disk full
+	fmt.Println(errors.Oneline(errors.Prefix(err, "backup failed")))
+	// backup failed: permission denied; backup failed: disk full
 
 	// Causal wrapping
 	dbErr := errors.New("connection refused")
 	err = errors.Wrapf(dbErr, "connect to %s:%d", "db.example.com", 5432)
-	fmt.Println(err)                    // connect to db.example.com:5432: connection refused
+	fmt.Println(err)                   // connect to db.example.com:5432: connection refused
 	fmt.Println(errors.Is(err, dbErr)) // true
 }
 ```
@@ -70,28 +72,35 @@ timeout := errors.New("timeout")
 refused := errors.New("connection refused")
 err := errors.Wrap(errors.Join(timeout, errors.Wrap(refused, "dial")), "sync failed")
 
-errors.Errors(err) // [sync failed: 2 errors occurred: ...]  (one wrapped item)
-errors.Leaves(err) // [timeout, connection refused]
+errors.Errors(err)  // [sync failed: 2 errors occurred: ...]  (one wrapped item)
+errors.Leaves(err)  // [timeout, connection refused]
+errors.Oneline(err) // "sync failed: timeout; dial: connection refused"
 ```
 
-Use `Leaves` for logging and error reporting. Cyclic or pathologically large
-error graphs are handled: the walk is bounded and never loops.
+Use `Leaves` for error reporting and `Oneline` for log messages. Cyclic or
+pathologically large error graphs are handled by both: the walk is bounded
+and never loops.
 
-## Collecting errors in loops
+## Collecting errors
+
+On hot paths, collect errors in a slice and join them once:
 
 ```go
-var err error
+var errs []error
 for _, item := range items {
 	if e := validate(item); e != nil {
-		err = errors.Append(err, e)
+		errs = append(errs, e)
 	}
 }
-return err // nil if nothing failed, the error itself if only one failed
+return errors.Join(errs...) // nil if nothing failed, the error itself if only one failed
 ```
 
-Appending to a multi-error reuses its backing array, so each call is
-amortized O(1). Results of appending to the same value never share state:
-appending to one base from several goroutines is safe.
+`err = errors.Append(err, e)` in a loop also works and is amortized O(1): it
+reuses the backing array, and results of appending to the same value never
+share state, so appending to one base from several goroutines is safe. But
+each call allocates a new multi-error value, so for 1000 errors it makes
+about 1000 allocations against 13 for the slice-and-`Join` pattern (see
+[Performance](#performance)).
 
 ## API
 
@@ -105,13 +114,15 @@ appending to one base from several goroutines is safe.
 | `Join(errs...) error` | Same as `Append` (see the differences from `errors.Join` below). |
 | `Flatten(err) error` | The single contained error if there is exactly one; otherwise `err`. |
 | `Prefix(err, prefix) error` | Wrap every contained error with `prefix`. |
-| `WithMessage(err, msg) error` | Add `msg` as a **sibling** error (a multi-error of `err` and `msg`). Unlike `pkg/errors.WithMessage`, this does not wrap; use `Wrap` for context. |
+| `AppendMessage(err, msg) error` | Add `msg` as a **sibling** error (a multi-error of `err` and `msg`). Use `Wrap` to add context. |
 | `Errors(err) []error` | Contained errors (a copy, safe to modify). |
 | `Leaves(err) []error` | Root causes at any depth. |
 | `Count(err) int` | `len(Errors(err))` without allocating. |
+| `Oneline(err) string` | Any error tree on one line: items joined with `"; "`, wraps as `"ctx: cause"`. |
 | `IsAny(err, targets...) bool` | `errors.Is` for any of the targets. |
 | `AsAny(err, targets...) bool` | `errors.As` for the first matching target. |
 | `Is`, `As`, `Unwrap`, `ErrUnsupported` | Re-exported from `errors`. |
+| `WithMessage(err, msg) error` | **Deprecated**, same as `AppendMessage`. Unlike `pkg/errors.WithMessage` it does not wrap, which the name wrongly suggests. |
 
 ## Differences from `errors.Join`
 
@@ -128,29 +139,66 @@ accepted by every function of this package.
 
 ## Formatting
 
-`%v` and `%s` print `Error()`, `%q` prints it quoted. `%+v` is passed down to
-the contained errors, so verbose formats of other libraries (for example
-stack traces) are kept.
+`%v` and `%s` print `Error()`. All string verbs and flags work as for a plain
+error: `%q`, `%x`, `%X`, `%-20s`, `%.10s` and so on. `%+v` is passed down to the
+contained errors, so verbose formats of other libraries (for example stack
+traces) are kept.
+
+`Error()` of a multi-error spans several lines. For plain-text logs, alerts
+and metric labels use `Oneline(err)`. It also flattens multi-errors hidden
+behind `Wrap` or `fmt.Errorf("ctx: %w", ...)`, and replaces line breaks left
+in other messages with `"; "`.
 
 ## Performance
 
-`make bench`. Go 1.26, Intel Xeon 2.1 GHz. v1.0.2 is the previous version.
+`make bench`. Go 1.22, linux/amd64.
 
-| Operation | v1.0.2 | v1.1.0 |
+| Operation | go-errors | Standard library |
 |---|---|---|
-| `Wrap(err, "ctx")` | 176 ns, 3 allocs | 29 ns, 1 alloc |
-| `Wrapf(err, "user %d", 42)` | 256 ns, 4 allocs | 87 ns, 2 allocs |
-| `Append(x, y)` | 239 ns, 6 allocs | 68 ns, 2 allocs |
-| `Append` in a loop, 1000 errors | 50 ms, 74 MB | 48 µs, 67 KB |
-| `Leaves`, chain of 3 wraps | 159 ns, 2 allocs | 39 ns, 1 alloc |
-| `Leaves`, multi-error | 276 ns, 2 allocs | 121 ns, 2 allocs |
-| `Count` | 63 ns, 1 alloc | 1.5 ns, 0 allocs |
-| `Flatten` | 356 ns, 8 allocs | 2.4 ns, 0 allocs |
+| Wrap once | 36 ns, 1 alloc | `fmt.Errorf("ctx: %w")`: 210 ns, 2 allocs |
+| `Wrapf(err, "user %d", 42)` | 137 ns, 2 allocs | — |
+| Build a 5-level chain, check with `errors.Is` | 221 ns, 6 allocs | 1140 ns, 11 allocs |
+| Build a 5-level chain, print it once | 288 ns, 7 allocs | 1090 ns, 11 allocs |
+| `Error()` of a ready 5-level chain | 85 ns, 1 alloc | 2 ns, 0 allocs (message stored) |
+| `Error()` of a ready 20-level chain | 205 ns, 1 alloc | 2 ns, 0 allocs |
+| `Append(x, y)` | 93 ns, 2 allocs | `errors.Join`: 76 ns, 2 allocs |
+| 1000 errors, `err = Append(err, e)` | 55 µs, 1010 allocs | — |
+| 1000 errors, slice + one `Join` | 25 µs, 13 allocs | — |
+| `Leaves`, chain of 3 wraps | 54 ns, 1 alloc | — |
+| `Oneline`, wrapped multi-error | 259 ns, 3 allocs | — |
+| `Count`, `Flatten` | 2–3 ns, 0 allocs | — |
 
-For reference: `fmt.Errorf("ctx: %w", err)` is 128 ns, 2 allocs;
-`errors.Join(x, y)` is 60 ns, 2 allocs.
+`Wrap` builds the message lazily. This is the right trade-off for servers,
+where most errors are only checked (`errors.Is`, retries, `ErrNotFound`) and
+never printed. The cost is that each `Error()` call builds the string again,
+in one allocation and linear time. If you print the same error many times,
+save the string once.
 
 ## Changelog
+
+### v1.2.0
+
+Fixes:
+
+- **Data corruption**: appending to the slice returned by a multi-error's
+  `Unwrap()` could overwrite an error of another multi-error that shared the
+  same backing array. `Unwrap()` now returns a slice whose capacity equals its
+  length.
+- `Error()` of a `Wrap` chain allocated once per level and copied O(depth²)
+  bytes (20 levels: 1.6 µs, 20 allocs, 5 KB). Now one allocation in linear
+  time (205 ns, 320 B).
+- `%x`, `%X`, width, precision and flags were ignored for wrapped errors and
+  multi-errors.
+
+Added:
+
+- `Oneline` for single-line messages.
+- `AppendMessage`; `WithMessage` is deprecated because its name suggests
+  wrapping, like `pkg/errors.WithMessage`.
+- CI: gofmt, vet, race tests on Go 1.21 and stable, staticcheck, fuzzing.
+- Benchmarks for real request paths and the slice-and-`Join` pattern.
+
+Removed: unused internal `leafError`.
 
 ### v1.1.0
 
@@ -183,7 +231,7 @@ make test   # tests with the race detector
 make cover  # coverage
 make bench  # benchmarks
 make fuzz   # fuzzing (FUZZTIME=5m make fuzz)
-make lint   # golangci-lint
+make lint   # staticcheck
 ```
 
 ## License
