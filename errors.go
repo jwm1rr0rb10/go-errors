@@ -522,7 +522,7 @@ func AsType[E error](err error) (E, bool) {
 	// The pointer handed to As methods is allocated only when an error with
 	// an As method is met, so the common case does not allocate.
 	var p *E
-	return asType(err, &p)
+	return asType[E](err, &p)
 }
 
 func asType[E error](err error, p **E) (E, bool) {
@@ -550,7 +550,7 @@ func asType[E error](err error, p **E) (E, bool) {
 				if e == nil {
 					continue
 				}
-				if found, ok := asType(e, p); ok {
+				if found, ok := asType[E](e, p); ok {
 					return found, true
 				}
 			}
@@ -762,7 +762,7 @@ func isPointer(err error) bool {
 func singleChainLeaf(err error) (leaf error, ok bool) {
 	start := err
 	startIsPtr := isPointer(start)
-	for depth := 0; depth < maxUnwrapDepth; depth++ {
+	for depth := range maxUnwrapDepth {
 		switch e := err.(type) {
 		case multiUnwrapper:
 			return nil, false
