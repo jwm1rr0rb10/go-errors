@@ -200,7 +200,7 @@ func FuzzErrorTrees(f *testing.F) {
 		checkAsTypeAgrees[valueWrapper](t, data, joined)
 
 		// Oneline never produces line breaks, whatever the tree looks like.
-		if line := Oneline(joined); strings.ContainsAny(line, "\r\n") {
+		if line := OneLine(joined); strings.ContainsAny(line, "\r\n") {
 			t.Fatalf("Oneline produced a line break: %q", line)
 		}
 		// Error of a Wrap chain matches the level-by-level definition.

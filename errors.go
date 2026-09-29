@@ -1,4 +1,4 @@
-// Package errors provides utilities for creating, wrapping, combining,
+// Package errors provide utilities for creating, wrapping, combining,
 // and inspecting errors.
 //
 // It has no dependencies outside the standard library and interoperates
@@ -13,16 +13,16 @@
 // (nested joins are flattened). For a single fmt.Errorf("%w") chain it returns the outer wrapper as
 // one element, not the inner cause.
 //
-// Leaves returns the root causes: it follows both single (%w) and multi
+// Leaves return the root causes: it follows both single (%w) and multi
 // (Unwrap() []error) wrapping at any depth, so it also finds the causes of a
 // wrapped multi-error. Use it for logging or error reporting.
 //
 // # Differences from the standard library
 //
 //   - Join flattens nested multi-errors and stdlib joined errors into one
-//     level, and returns the error itself (not a wrapper) when only one
-//     non-nil error is given. errors.Join keeps the nesting.
-//   - Multi-errors print as "N errors occurred:" followed by one line per
+//     level and returns the error itself (not a wrapper) when only one
+//     non-nil error is given. Errors.Join keeps the nesting.
+//   - Multi-errors print as "N errors occurred": followed by one line per
 //     error; errors.Join separates messages with newlines only.
 //
 // Like errors.Join, nothing is deduplicated: joining the same error twice
@@ -31,7 +31,7 @@
 // # Single-line messages
 //
 // The Error method of a multi-error spans several lines. For plain-text logs
-// and metrics labels use Oneline, which renders any error tree on one line:
+// and metrics labels use OneLine, which renders any error tree on one line:
 // "sync failed: timeout; dial: connection refused".
 package errors
 
@@ -50,13 +50,13 @@ import (
 const maxUnwrapDepth = 100
 
 // maxLeavesNodes bounds the total number of errors Leaves visits, so that
-// pathological graphs (e.g. an error whose Unwrap() []error returns itself
+// pathological graphs (e.g., an error whose Unwrap() []error returns itself
 // twice) cannot cause exponential work.
 const maxLeavesNodes = 10000
 
 // ErrUnsupported is errors.ErrUnsupported, re-exported so this package can
 // replace the standard errors package in imports (together with Is, As,
-// AsType and Unwrap).
+// AsType, and Unwrap).
 var ErrUnsupported = errors.ErrUnsupported
 
 // multiError is the internal multi-error type. It implements the same
@@ -94,7 +94,7 @@ func (m *multiError) Error() string {
 }
 
 // Format implements fmt.Formatter. %+v formats every error with %+v, so
-// verbose formats of the contained errors (e.g. stack traces) are kept.
+// verbose formats of the contained errors (e.g., stack traces) are kept.
 //
 // Write errors are ignored on purpose: Format cannot return them, and fmt
 // reports its own errors to the caller of Printf/Sprintf.
@@ -188,8 +188,8 @@ func (w *wrapError) Format(s fmt.State, verb rune) {
 	formatString(s, verb, w.Error())
 }
 
-// formatString prints msg with the verb, flags, width and precision of the
-// current directive, so %q, %x, %X, %-20s and so on behave as they do for
+// formatString prints msg with the verb, flags, width, and precision of the
+// current directive, so %q, %x, %X, %-20s, and so on behave as they do for
 // plain errors.
 func formatString(s fmt.State, verb rune, msg string) {
 	if verb == 's' && !hasFlagsOrWidth(s) {
@@ -231,7 +231,7 @@ func Wrap(err error, msg string) error {
 // Wrapf wraps err with a formatted message: "format(args...): err".
 // If err is nil, returns nil.
 //
-// err is always the wrapped cause; format must not contain %w (go vet
+// Err is always the wrapped cause; a format must not contain %w (go vet
 // reports it). Use %% for a literal percent sign.
 func Wrapf(err error, format string, args ...any) error {
 	if err == nil {
@@ -304,7 +304,7 @@ func Flatten(err error) error {
 	}
 }
 
-// Prefix wraps every top-level error inside err with prefix
+// Prefix wraps every top-level error inside err with a prefix
 // (works for both single errors and multi-errors).
 func Prefix(err error, prefix string) error {
 	if err == nil {
@@ -320,8 +320,8 @@ func Prefix(err error, prefix string) error {
 	return build(errs)
 }
 
-// Errors returns the items inside err. Multi-errors and values produced by
-// errors.Join are flattened at any depth; wrapped errors are not unwrapped.
+// Errors return the items inside err. Multi-errors and values produced by
+// errors.Joins are flattened at any depth; wrapped errors are not unwrapped.
 // A single fmt.Errorf("%w") chain is returned as a one-element slice
 // containing the outer wrapper. Use Leaves to reach root causes.
 // The returned slice is a copy and may be modified.
@@ -329,7 +329,7 @@ func Errors(err error) []error {
 	return appendFlat(nil, err)
 }
 
-// Leaves returns the root causes of err: errors that wrap nothing. It
+// Leaves return the root causes of err: errors that wrap nothing. It
 // follows both Unwrap() error and Unwrap() []error at any depth, so the
 // causes of a wrapped multi-error are found too. Order is depth-first,
 // left to right; nil is never included.
@@ -349,7 +349,7 @@ func Leaves(err error) []error {
 	return w.out
 }
 
-// Count returns the number of errors contained in err, i.e. len(Errors(err)),
+// Count returns the number of errors contained in err, i.e., len(Errors(err)),
 // without allocating.
 func Count(err error) int {
 	return countOne(err)
@@ -369,12 +369,12 @@ func AppendMessage(err error, msg string) error {
 //
 // Deprecated: the name suggests the behavior of pkg/errors.WithMessage,
 // which wraps err, while this function adds a sibling error. Use
-// AppendMessage for the same behavior, or Wrap to add context.
+// AppendMessage for the same behavior or Wrap to add context.
 func WithMessage(err error, msg string) error {
 	return AppendMessage(err, msg)
 }
 
-// Oneline renders err on a single line, for plain-text logs and metrics.
+// OneLine renders err on a single line, for plain-text logs and metrics.
 //
 // Multi-errors (this package's and any Unwrap() []error value, including
 // errors.Join) are rendered as their items separated by "; ", wrapped
@@ -388,22 +388,22 @@ func WithMessage(err error, msg string) error {
 // Any line breaks left in other messages are replaced with "; ". The walk
 // is bounded like Leaves, so cyclic or huge error graphs are safe; output
 // that hits the limit ends with "...". Returns "" for nil.
-func Oneline(err error) string {
+func OneLine(err error) string {
 	if err == nil {
 		return ""
 	}
-	o := onelineWriter{budget: maxLeavesNodes}
+	o := oneLineWriter{budget: maxLeavesNodes}
 	o.write(err, 0)
 	return o.b.String()
 }
 
-type onelineWriter struct {
+type oneLineWriter struct {
 	b         strings.Builder
 	budget    int
 	truncated bool
 }
 
-func (o *onelineWriter) write(err error, depth int) {
+func (o *oneLineWriter) write(err error, depth int) {
 	if o.truncated {
 		return
 	}
@@ -460,7 +460,7 @@ func (o *onelineWriter) write(err error, depth int) {
 
 // writeFlat writes msg, replacing line breaks with "; " and dropping
 // blank lines and surrounding spaces.
-func (o *onelineWriter) writeFlat(msg string) {
+func (o *oneLineWriter) writeFlat(msg string) {
 	if !strings.ContainsAny(msg, "\r\n") {
 		o.b.WriteString(msg)
 		return
@@ -479,7 +479,7 @@ func (o *onelineWriter) writeFlat(msg string) {
 	}
 }
 
-// IsAny reports whether any of the targets is present in err's tree
+// IsAny reports whether any of the targets is present in an errs tree
 // (including multi-error siblings).
 func IsAny(err error, targets ...error) bool {
 	for _, t := range targets {
@@ -490,7 +490,7 @@ func IsAny(err error, targets ...error) bool {
 	return false
 }
 
-// AsAny tries targets in order and stores the first match found in err's
+// AsAny tries targets in order and stores the first match found in an errs
 // tree (including multi-error siblings). Returns true if any target matched.
 func AsAny(err error, targets ...any) bool {
 	for _, t := range targets {
@@ -501,7 +501,7 @@ func AsAny(err error, targets ...any) bool {
 	return false
 }
 
-// AsType finds the first error in err's tree that matches the type E and
+// AsType finds the first error in an errs tree that matches the type E and
 // returns it. It is the generic form of As, with the same semantics as
 // errors.AsType from Go 1.26, but available from Go 1.21:
 //
@@ -570,10 +570,10 @@ func asType[E error](err error, p **E) (E, bool) {
 // Unwrap is errors.Unwrap. It returns nil for multi-errors; use Errors.
 func Unwrap(err error) error { return errors.Unwrap(err) }
 
-// Is is errors.Is.
+// Is are errors.Is.
 func Is(err, target error) bool { return errors.Is(err, target) }
 
-// As is errors.As.
+// As are errors.As.
 func As(err error, target any) bool { return errors.As(err, target) }
 
 // multiUnwrapper is implemented by errors.Join values and multi-errors from
@@ -657,7 +657,7 @@ func appendNested(dst []error, e multiUnwrapper, depth int, budget *int) []error
 	return dst
 }
 
-// joinNonNil flattens first and rest into a new multi-error.
+// joinNonNil flattens first and the rest into a new multi-error.
 func joinNonNil(first error, rest []error) error {
 	n := countOne(first)
 	for _, e := range rest {
@@ -758,7 +758,7 @@ func isPointer(err error) bool {
 }
 
 // singleChainLeaf follows Unwrap() error links while there is no multi-error
-// and returns the root. ok is false if a multi-error is met (the caller must
+// and returns the root. Ok is false if a multi-error is met (the caller must
 // do a full walk). Cycles are caught by comparing pointer-typed errors with
 // the chain start and by the depth limit, without allocating.
 func singleChainLeaf(err error) (leaf error, ok bool) {

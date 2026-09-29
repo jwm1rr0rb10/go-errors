@@ -69,7 +69,7 @@ func ExampleOneline() {
 	refused := errors.New("connection refused")
 	err := errors.Wrap(errors.Join(timeout, errors.Wrap(refused, "dial")), "sync failed")
 
-	fmt.Println(errors.Oneline(err))
+	fmt.Println(errors.OneLine(err))
 	// Output: sync failed: timeout; dial: connection refused
 }
 
@@ -81,13 +81,13 @@ func ExampleJoin_hotPath() {
 		}
 	}
 	err := errors.Join(errs...) // nil if nothing failed
-	fmt.Println(errors.Oneline(err))
+	fmt.Println(errors.OneLine(err))
 	// Output: empty name; empty name
 }
 
 func ExampleAppendMessage() {
 	err := errors.AppendMessage(errors.New("upload failed"), "retry scheduled")
-	fmt.Println(errors.Oneline(err))
+	fmt.Println(errors.OneLine(err))
 	// Output: upload failed; retry scheduled
 }
 

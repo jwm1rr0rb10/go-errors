@@ -185,6 +185,6 @@ func BenchmarkOneline(b *testing.B) {
 	err := Wrap(Join(New("timeout"), Wrap(New("connection refused"), "dial")), "sync failed")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		sinkString = Oneline(err)
+		sinkString = OneLine(err)
 	}
 }

@@ -115,7 +115,7 @@ func TestOneline(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Oneline(tt.err); got != tt.want {
+			if got := OneLine(tt.err); got != tt.want {
 				t.Errorf("Oneline = %q, want %q", got, tt.want)
 			}
 		})
@@ -131,7 +131,7 @@ func TestOnelinePathological(t *testing.T) {
 	// selfJoin (regression_test.go) returns itself twice from Unwrap:
 	// an unbounded walk would be exponential.
 	s := &selfJoin{}
-	got := Oneline(s)
+	got := OneLine(s)
 	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("expected truncated output, got %d bytes ending %q", len(got), got[max(0, len(got)-20):])
 	}
@@ -143,7 +143,7 @@ func TestOnelinePathological(t *testing.T) {
 	a := &cyclicErr{msg: "a"}
 	b := &cyclicErr{msg: "b", next: a}
 	a.next = b
-	if got := Oneline(a); got == "" || len(got) > 10_000 {
+	if got := OneLine(a); got == "" || len(got) > 10_000 {
 		t.Fatalf("Oneline on a cycle returned %d bytes", len(got))
 	}
 }
@@ -164,7 +164,7 @@ func TestWrapChainNonComparableRoot(t *testing.T) {
 	if got := err.Error(); got != want {
 		t.Fatalf("Error() = %q, want %q", got, want)
 	}
-	if got := Oneline(err); got != want {
+	if got := OneLine(err); got != want {
 		t.Fatalf("Oneline = %q, want %q", got, want)
 	}
 }
