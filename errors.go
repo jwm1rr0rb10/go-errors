@@ -7,7 +7,7 @@
 // of the box, and errors produced by errors.Join or fmt.Errorf are accepted
 // everywhere.
 //
-// # Errors vs Leaves
+// # Errors vs. Leaves
 //
 // Errors returns the items inside a multi-error or stdlib joined error
 // (nested joins are flattened). For a single fmt.Errorf("%w") chain it returns the outer wrapper as
@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -94,19 +95,22 @@ func (m *multiError) Error() string {
 
 // Format implements fmt.Formatter. %+v formats every error with %+v, so
 // verbose formats of the contained errors (e.g. stack traces) are kept.
+//
+// Write errors are ignored on purpose: Format cannot return them, and fmt
+// reports its own errors to the caller of Printf/Sprintf.
 func (m *multiError) Format(s fmt.State, verb rune) {
 	switch verb {
 	case 'v':
 		if s.Flag('+') {
 			if len(m.errs) == 1 {
-				fmt.Fprintf(s, "%+v", m.errs[0])
+				_, _ = fmt.Fprintf(s, "%+v", m.errs[0])
 				return
 			}
 			for i, err := range m.errs {
 				if i > 0 {
-					fmt.Fprint(s, "\n")
+					_, _ = io.WriteString(s, "\n")
 				}
-				fmt.Fprintf(s, "  - %+v", err)
+				_, _ = fmt.Fprintf(s, "  - %+v", err)
 			}
 			return
 		}
@@ -176,7 +180,7 @@ func (w *wrapError) Format(s fmt.State, verb rune) {
 	switch verb {
 	case 'v':
 		if s.Flag('+') {
-			fmt.Fprintf(s, "%s: %+v", w.msg, w.err)
+			_, _ = fmt.Fprintf(s, "%s: %+v", w.msg, w.err)
 			return
 		}
 		verb = 's'
@@ -192,7 +196,7 @@ func formatString(s fmt.State, verb rune, msg string) {
 		_, _ = io.WriteString(s, msg)
 		return
 	}
-	fmt.Fprintf(s, fmt.FormatString(s, verb), msg)
+	_, _ = fmt.Fprintf(s, fmt.FormatString(s, verb), msg)
 }
 
 func hasFlagsOrWidth(s fmt.State) bool {
@@ -742,12 +746,10 @@ func (w *leavesWalker) onPath(err error) bool {
 	if len(w.path) == 0 || !isPointer(err) {
 		return false
 	}
-	for _, p := range w.path {
-		if p == err {
-			return true
-		}
-	}
-	return false
+	// Safe: err is a pointer, so each comparison is either between two
+	// pointers or between different dynamic types (false). It can only
+	// panic for two values of the same non-comparable type.
+	return slices.Contains(w.path, err)
 }
 
 func isPointer(err error) bool {
