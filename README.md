@@ -197,69 +197,7 @@ never printed. The cost is that each `Error()` call builds the string again,
 in one allocation and linear time. If you print the same error many times,
 save the string once.
 
-## Changelog
-
-### v1.3.0
-
-Added:
-
-- `AsType[E](err)`, the generic form of `As` with the semantics of
-  `errors.AsType` from Go 1.26, available from Go 1.21. Code that imports this
-  package instead of `errors` can now use it, including code rewritten by
-  `go fix`. It uses no reflection and does not allocate: 26 ns against 188 ns
-  and 1 allocation for `errors.As`.
-- CI workflow (it was described in v1.2.0 but missing from the repository).
-
-Checked against Go 1.27: no changes to the packages this library depends on;
-the new default `stdversion` vet check passes with `go 1.21` in `go.mod`.
-
-### v1.2.0
-
-Fixes:
-
-- **Data corruption**: appending to the slice returned by a multi-error's
-  `Unwrap()` could overwrite an error of another multi-error that shared the
-  same backing array. `Unwrap()` now returns a slice whose capacity equals its
-  length.
-- `Error()` of a `Wrap` chain allocated once per level and copied O(depth²)
-  bytes (20 levels: 1.6 µs, 20 allocs, 5 KB). Now one allocation in linear
-  time (205 ns, 320 B).
-- `%x`, `%X`, width, precision and flags were ignored for wrapped errors and
-  multi-errors.
-
-Added:
-
-- `Oneline` for single-line messages.
-- `AppendMessage`; `WithMessage` is deprecated because its name suggests
-  wrapping, like `pkg/errors.WithMessage`.
-- CI: gofmt, vet, race tests on Go 1.21 and stable, staticcheck, fuzzing.
-- Benchmarks for real request paths and the slice-and-`Join` pattern.
-
-Removed: unused internal `leafError`.
-
-### v1.1.0
-
-Fixes:
-
-- **Panic** `hash of unhashable type` when an error of a non-comparable type
-  (a slice such as `validator.ValidationErrors`, or a struct with a map) was
-  passed to `Append`, `Join`, `Flatten` or `Leaves`, and in
-  `Leaves(Wrap(Join(a, b), ...))`.
-- `Append` in a loop was quadratic (20,000 appends took 32 s); now amortized O(1).
-- `Leaves` did not look inside wrapped multi-errors.
-- `%q` did not quote multi-errors.
-
-Behavior changes:
-
-- No deduplication: `Join(err, err)` keeps both, like `errors.Join`.
-  Previously identical errors were merged, which lost the count of failures.
-- Nested joins are flattened at any depth (was one level), so `Count`,
-  `Errors` and `Join` always agree.
-- `Wrap`/`Wrapf` return an internal type instead of `*fmt.wrapError`. Messages,
-  `errors.Is/As/Unwrap` are unchanged.
-
-Added: `ErrUnsupported`, runnable examples, fuzzing of arbitrary error trees,
-benchmarks. Minimum Go version lowered from 1.25 to 1.21.
+---
 
 ## Development
 
