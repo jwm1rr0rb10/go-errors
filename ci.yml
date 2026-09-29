@@ -23,7 +23,7 @@ jobs:
       - name: test
         run: go test -race -count=1 ./...
       - name: staticcheck
-        if: matrix.go == 'stable'ci
+        if: matrix.go == 'stable'
         run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
 
   fuzz:

@@ -90,3 +90,15 @@ func ExampleAppendMessage() {
 	fmt.Println(errors.Oneline(err))
 	// Output: upload failed; retry scheduled
 }
+
+func ExampleAsType() {
+	err := errors.Wrap(errors.Join(
+		errors.New("db down"),
+		validationErrors{"name is required"},
+	), "create user")
+
+	if ve, ok := errors.AsType[validationErrors](err); ok {
+		fmt.Println("validation failed:", ve)
+	}
+	// Output: validation failed: [name is required]
+}

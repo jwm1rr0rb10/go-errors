@@ -194,6 +194,11 @@ func FuzzErrorTrees(f *testing.F) {
 		_ = AppendMessage(joined, "m")
 		_ = fmt.Sprintf("%v %+v %s %q %x %-10s", joined, joined, joined, joined, joined, joined)
 
+		// AsType agrees with errors.As on arbitrary trees.
+		checkAsTypeAgrees[validationErrors](t, data, joined)
+		checkAsTypeAgrees[fieldErr](t, data, joined)
+		checkAsTypeAgrees[valueWrapper](t, data, joined)
+
 		// Oneline never produces line breaks, whatever the tree looks like.
 		if line := Oneline(joined); strings.ContainsAny(line, "\r\n") {
 			t.Fatalf("Oneline produced a line break: %q", line)

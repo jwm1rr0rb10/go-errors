@@ -54,7 +54,8 @@ const maxUnwrapDepth = 100
 const maxLeavesNodes = 10000
 
 // ErrUnsupported is errors.ErrUnsupported, re-exported so this package can
-// replace the standard errors package in imports.
+// replace the standard errors package in imports (together with Is, As,
+// AsType and Unwrap).
 var ErrUnsupported = errors.ErrUnsupported
 
 // multiError is the internal multi-error type. It implements the same
@@ -494,6 +495,72 @@ func AsAny(err error, targets ...any) bool {
 		}
 	}
 	return false
+}
+
+// AsType finds the first error in err's tree that matches the type E and
+// returns it. It is the generic form of As, with the same semantics as
+// errors.AsType from Go 1.26, but available from Go 1.21:
+//
+//	if pathErr, ok := errors.AsType[*fs.PathError](err); ok {
+//		fmt.Println("failed at path:", pathErr.Path)
+//	}
+//
+// The tree is walked depth-first, like errors.As: err itself, then the
+// errors returned by Unwrap() error or Unwrap() []error, including
+// multi-errors of this package and errors.Join values. An error matches if
+// it is assignable to E, or if it has a method As(any) bool that returns
+// true for a pointer to E.
+//
+// Unlike As, AsType uses no reflection and cannot panic on a wrong target
+// type: E is checked at compile time. Like As (and unlike Leaves), it does
+// not protect against cyclic error graphs.
+func AsType[E error](err error) (E, bool) {
+	if err == nil {
+		var zero E
+		return zero, false
+	}
+	// The pointer handed to As methods is allocated only when an error with
+	// an As method is met, so the common case does not allocate.
+	var p *E
+	return asType(err, &p)
+}
+
+func asType[E error](err error, p **E) (E, bool) {
+	for {
+		if e, ok := err.(E); ok {
+			return e, true
+		}
+		if x, ok := err.(interface{ As(any) bool }); ok {
+			if *p == nil {
+				*p = new(E)
+			}
+			if x.As(*p) {
+				return **p, true
+			}
+		}
+		switch x := err.(type) {
+		case interface{ Unwrap() error }:
+			err = x.Unwrap()
+			if err == nil {
+				var zero E
+				return zero, false
+			}
+		case interface{ Unwrap() []error }:
+			for _, e := range x.Unwrap() {
+				if e == nil {
+					continue
+				}
+				if found, ok := asType(e, p); ok {
+					return found, true
+				}
+			}
+			var zero E
+			return zero, false
+		default:
+			var zero E
+			return zero, false
+		}
+	}
 }
 
 // Unwrap is errors.Unwrap. It returns nil for multi-errors; use Errors.

@@ -6,8 +6,10 @@ Error utilities for Go with first-class multi-error support and full
 interoperability with the standard `errors` package. No dependencies outside
 the standard library.
 
-- `New`, `Errorf`, `Wrap`, `Wrapf`, and `Is` / `As` / `Unwrap` / `ErrUnsupported`
-  re-exported, so the package can replace `errors` in imports
+- `New`, `Errorf`, `Wrap`, `Wrapf`, and `Is` / `As` / `AsType` / `Unwrap` /
+  `ErrUnsupported`, so the package can replace `errors` in imports
+- `AsType[E](err)`, the generic `errors.AsType` from Go 1.26, available from
+  Go 1.21: no reflection, no allocations, about 7× faster than `errors.As`
 - `Wrap` is about 5× cheaper than `fmt.Errorf("ctx: %w", err)`: one allocation,
   no format parsing, no stack traces; the message is built only when printed
 - Multi-errors: `Append`, `Join`, `Flatten`, `Prefix`, `AppendMessage`, `Errors`, `Count`
@@ -23,7 +25,8 @@ the standard library.
 go get github.com/jwm1rr0rb10/go-errors
 ```
 
-Requires Go 1.21+.
+Requires Go 1.21+. Compatible with Go 1.27; CI runs the tests on Go 1.21 and
+the latest stable release.
 
 ## Quick start
 
@@ -59,6 +62,22 @@ func main() {
 	fmt.Println(errors.Is(err, dbErr)) // true
 }
 ```
+
+## Type-safe matching with AsType
+
+```go
+if pathErr, ok := errors.AsType[*fs.PathError](err); ok {
+	fmt.Println("failed at path:", pathErr.Path)
+}
+```
+
+`AsType` has the same semantics as `errors.AsType` from Go 1.26 and works
+from Go 1.21, so code that imports this package instead of `errors` keeps
+compiling. It walks the error tree like `errors.As` (wrapped errors,
+multi-errors, `errors.Join` values, `As(any) bool` methods), but checks the
+type at compile time, uses no reflection and does not allocate. `go fix` on
+Go 1.26+ rewrites simple `errors.As` calls into `AsType`; with this package
+the rewritten code works unchanged.
 
 ## Errors vs Leaves
 
@@ -121,6 +140,7 @@ about 1000 allocations against 13 for the slice-and-`Join` pattern (see
 | `Oneline(err) string` | Any error tree on one line: items joined with `"; "`, wraps as `"ctx: cause"`. |
 | `IsAny(err, targets...) bool` | `errors.Is` for any of the targets. |
 | `AsAny(err, targets...) bool` | `errors.As` for the first matching target. |
+| `AsType[E](err) (E, bool)` | Generic `As`: the first error in the tree that matches `E`. Same as `errors.AsType` (Go 1.26), available from Go 1.21, without reflection or allocations. |
 | `Is`, `As`, `Unwrap`, `ErrUnsupported` | Re-exported from `errors`. |
 | `WithMessage(err, msg) error` | **Deprecated**, same as `AppendMessage`. Unlike `pkg/errors.WithMessage` it does not wrap, which the name wrongly suggests. |
 
@@ -151,7 +171,9 @@ in other messages with `"; "`.
 
 ## Performance
 
-`make bench`. Go 1.22, linux/amd64.
+`make bench`. Go 1.22, linux/amd64. Go 1.27 made small allocations (under
+80 bytes) cheaper, which includes every value this package allocates, so
+numbers on newer Go versions are expected to be the same or better.
 
 | Operation | go-errors | Standard library |
 |---|---|---|
@@ -164,6 +186,7 @@ in other messages with `"; "`.
 | `Append(x, y)` | 93 ns, 2 allocs | `errors.Join`: 76 ns, 2 allocs |
 | 1000 errors, `err = Append(err, e)` | 55 µs, 1010 allocs | — |
 | 1000 errors, slice + one `Join` | 25 µs, 13 allocs | — |
+| `AsType`, match inside a wrapped multi-error | 26 ns, 0 allocs | `errors.As`: 188 ns, 1 alloc |
 | `Leaves`, chain of 3 wraps | 54 ns, 1 alloc | — |
 | `Oneline`, wrapped multi-error | 259 ns, 3 allocs | — |
 | `Count`, `Flatten` | 2–3 ns, 0 allocs | — |
@@ -175,6 +198,20 @@ in one allocation and linear time. If you print the same error many times,
 save the string once.
 
 ## Changelog
+
+### v1.3.0
+
+Added:
+
+- `AsType[E](err)`, the generic form of `As` with the semantics of
+  `errors.AsType` from Go 1.26, available from Go 1.21. Code that imports this
+  package instead of `errors` can now use it, including code rewritten by
+  `go fix`. It uses no reflection and does not allocate: 26 ns against 188 ns
+  and 1 allocation for `errors.As`.
+- CI workflow (it was described in v1.2.0 but missing from the repository).
+
+Checked against Go 1.27: no changes to the packages this library depends on;
+the new default `stdversion` vet check passes with `go 1.21` in `go.mod`.
 
 ### v1.2.0
 
