@@ -85,7 +85,7 @@ func TestLeavesWalksNestedMultiErrors(t *testing.T) {
 
 // selfJoin returns itself from Unwrap() []error: a pathological type that
 // would recurse forever (and exponentially) without protection.
-type selfJoin struct{ n int }
+type selfJoin struct{ _ byte } // non-zero size: distinct pointers
 
 func (s *selfJoin) Error() string   { return "self" }
 func (s *selfJoin) Unwrap() []error { return []error{s, s} }
@@ -236,5 +236,71 @@ func (verboseErr) Format(s fmt.State, verb rune) {
 func TestErrUnsupportedReexported(t *testing.T) {
 	if ErrUnsupported != stderrors.ErrUnsupported {
 		t.Fatal("ErrUnsupported must be the stdlib sentinel")
+	}
+}
+
+// fieldErrors is a domain multi-error with its own message, like a
+// validation error or a multi-error from another library.
+type fieldErrors struct {
+	field string
+	errs  []error
+}
+
+func (f *fieldErrors) Error() string   { return "invalid " + f.field }
+func (f *fieldErrors) Unwrap() []error { return f.errs }
+
+// Regression: only this package's multi-errors and errors.Join values are
+// flattened. Other Unwrap() []error types keep their type and message.
+func TestForeignMultiErrorIsNotFlattened(t *testing.T) {
+	empty, bad := New("empty"), New("bad")
+	fe := &fieldErrors{field: "email", errs: []error{empty, bad}}
+	db := New("db")
+	multiW := fmt.Errorf("a: %w, b: %w", empty, bad)
+
+	for name, err := range map[string]error{
+		"Append":         Append(db, fe),
+		"Join":           Join(db, fe),
+		"Append to join": Append(stderrors.Join(db), fe),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var target *fieldErrors
+			if !As(err, &target) || target != fe {
+				t.Fatal("errors.As lost the foreign multi-error")
+			}
+			if got := Errors(err); len(got) != 2 || got[0] != db || got[1] != fe {
+				t.Fatalf("Errors = %q, want [db fe]", got)
+			}
+			if Count(err) != 2 {
+				t.Fatalf("Count = %d, want 2", Count(err))
+			}
+			if !Is(err, empty) || !Is(err, bad) {
+				t.Fatal("errors.Is must still see inside the foreign multi-error")
+			}
+			if want := "2 errors occurred:\n  - db\n  - invalid email"; err.Error() != want {
+				t.Fatalf("Error() = %q, want %q", err.Error(), want)
+			}
+			if got, want := OneLine(err), "db; invalid email"; got != want {
+				t.Fatalf("OneLine = %q, want %q", got, want)
+			}
+		})
+	}
+
+	if got := Errors(fe); len(got) != 1 || got[0] != fe {
+		t.Fatalf("Errors(fe) = %q, want [fe]", got)
+	}
+	if Flatten(&fieldErrors{field: "x", errs: []error{empty}}) == empty {
+		t.Fatal("Flatten must not unwrap a foreign multi-error")
+	}
+	if got := Prefix(fe, "p").Error(); got != "p: invalid email" {
+		t.Fatalf("Prefix(fe) = %q", got)
+	}
+	if got := Errors(Join(multiW, db)); len(got) != 2 || got[0] != multiW {
+		t.Fatalf("fmt.Errorf with several %%w must stay one item, got %q", got)
+	}
+	if n := testing.AllocsPerRun(100, func() { _ = Flatten(db) }); n != 0 {
+		t.Fatalf("Flatten(plain) allocates %v times", n)
+	}
+	if got := Leaves(Append(db, fe)); len(got) != 3 || got[1] != empty || got[2] != bad {
+		t.Fatalf("Leaves must go inside foreign multi-errors, got %q", got)
 	}
 }

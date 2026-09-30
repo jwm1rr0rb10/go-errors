@@ -174,6 +174,7 @@ func BenchmarkCollectThenJoin1000(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var acc []error
+		//lint:ignore S1011 simulates collecting errors one at a time
 		for _, e := range errs {
 			acc = append(acc, e)
 		}
@@ -181,7 +182,7 @@ func BenchmarkCollectThenJoin1000(b *testing.B) {
 	}
 }
 
-func BenchmarkOneline(b *testing.B) {
+func BenchmarkOneLine(b *testing.B) {
 	err := Wrap(Join(New("timeout"), Wrap(New("connection refused"), "dial")), "sync failed")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

@@ -14,7 +14,7 @@ the standard library.
   no format parsing, no stack traces; the message is built only when printed
 - Multi-errors: `Append`, `Join`, `Flatten`, `Prefix`, `AppendMessage`, `Errors`, `Count`
 - `Leaves` finds every root cause, at any depth, including behind wrapped multi-errors
-- `Oneline` renders any error tree on one line for plain-text logs
+- `OneLine` renders any error tree on one line for plain-text logs
 - Works with `fmt.Errorf("%w")`, `errors.Is`, `errors.As` and `errors.Join` values
 - Safe with any error type, including non-comparable ones (slices, maps)
 - Race-tested, fuzz-tested in CI, 90%+ coverage
@@ -48,11 +48,11 @@ func main() {
 	//   - disk full
 
 	// Same error on one line, for plain-text logs
-	fmt.Println(errors.Oneline(err))
+	fmt.Println(errors.OneLine(err))
 	// permission denied; disk full
 
 	// Add the same context to every error
-	fmt.Println(errors.Oneline(errors.Prefix(err, "backup failed")))
+	fmt.Println(errors.OneLine(errors.Prefix(err, "backup failed")))
 	// backup failed: permission denied; backup failed: disk full
 
 	// Causal wrapping
@@ -93,10 +93,10 @@ err := errors.Wrap(errors.Join(timeout, errors.Wrap(refused, "dial")), "sync fai
 
 errors.Errors(err)  // [sync failed: 2 errors occurred: ...]  (one wrapped item)
 errors.Leaves(err)  // [timeout, connection refused]
-errors.Oneline(err) // "sync failed: timeout; dial: connection refused"
+errors.OneLine(err) // "sync failed: timeout; dial: connection refused"
 ```
 
-Use `Leaves` for error reporting and `Oneline` for log messages. Cyclic or
+Use `Leaves` for error reporting and `OneLine` for log messages. Cyclic or
 pathologically large error graphs are handled by both: the walk is bounded
 and never loops.
 
@@ -129,7 +129,7 @@ about 1000 allocations against 13 for the slice-and-`Join` pattern (see
 | `Errorf(format, args...) error` | `fmt.Errorf`; use `%w` to wrap. |
 | `Wrap(err, msg) error` | `"msg: err"`, keeps `err` as the cause. nil → nil. |
 | `Wrapf(err, format, args...) error` | `Wrap` with a formatted message. nil → nil. `format` must not contain `%w` (`go vet` reports it); use `%%` for `%`. |
-| `Append(err, errs...) error` | Combine errors; nested multi-errors flattened, nils skipped. All nil → nil; one non-nil → that error. |
+| `Append(err, errs...) error` | Combine errors; nested multi-errors of this package and `errors.Join` values flattened, nils skipped. All nil → nil; one non-nil → that error. |
 | `Join(errs...) error` | Same as `Append` (see the differences from `errors.Join` below). |
 | `Flatten(err) error` | The single contained error if there is exactly one; otherwise `err`. |
 | `Prefix(err, prefix) error` | Wrap every contained error with `prefix`. |
@@ -137,7 +137,7 @@ about 1000 allocations against 13 for the slice-and-`Join` pattern (see
 | `Errors(err) []error` | Contained errors (a copy, safe to modify). |
 | `Leaves(err) []error` | Root causes at any depth. |
 | `Count(err) int` | `len(Errors(err))` without allocating. |
-| `Oneline(err) string` | Any error tree on one line: items joined with `"; "`, wraps as `"ctx: cause"`. |
+| `OneLine(err) string` | Any error tree on one line: items joined with `"; "`, wraps as `"ctx: cause"`. |
 | `IsAny(err, targets...) bool` | `errors.Is` for any of the targets. |
 | `AsAny(err, targets...) bool` | `errors.As` for the first matching target. |
 | `AsType[E](err) (E, bool)` | Generic `As`: the first error in the tree that matches `E`. Same as `errors.AsType` (Go 1.26), available from Go 1.21, without reflection or allocations. |
@@ -154,8 +154,15 @@ about 1000 allocations against 13 for the slice-and-`Join` pattern (see
 | `errors.Is` / `errors.As` | Yes | Yes |
 | Message | `N errors occurred:` + one `  - msg` line per error | Messages separated by newlines |
 
-Values created by `errors.Join` (and any type with `Unwrap() []error`) are
-accepted by every function of this package.
+Values created by `errors.Join` are accepted by every function of this
+package and flattened like its own multi-errors.
+
+Other types with `Unwrap() []error` (a domain validation error, a multi-error
+from another library, `fmt.Errorf` with several `%w`) are **not** flattened.
+They can carry their own message and fields, so `Append`, `Join`, `Errors`,
+`Count`, `Flatten`, `Prefix`, and `OneLine` treat them as one item.
+`errors.As` still finds them, `errors.Is` still looks inside them, and
+`Leaves` still reaches their root causes.
 
 ## Formatting
 
@@ -165,9 +172,10 @@ contained errors, so verbose formats of other libraries (for example stack
 traces) are kept.
 
 `Error()` of a multi-error spans several lines. For plain-text logs, alerts
-and metric labels use `Oneline(err)`. It also flattens multi-errors hidden
-behind `Wrap` or `fmt.Errorf("ctx: %w", ...)`, and replaces line breaks left
-in other messages with `"; "`.
+and metric labels use `OneLine(err)`. It also flattens multi-errors (this
+package's and `errors.Join` values) hidden behind `Wrap` or
+`fmt.Errorf("ctx: %w", ...)`, prints other multi-error types by their own
+message, and replaces line breaks left in messages with `"; "`.
 
 ## Performance
 
@@ -188,7 +196,7 @@ numbers on newer Go versions are expected to be the same or better.
 | 1000 errors, slice + one `Join` | 25 µs, 13 allocs | — |
 | `AsType`, match inside a wrapped multi-error | 26 ns, 0 allocs | `errors.As`: 188 ns, 1 alloc |
 | `Leaves`, chain of 3 wraps | 54 ns, 1 alloc | — |
-| `Oneline`, wrapped multi-error | 259 ns, 3 allocs | — |
+| `OneLine`, wrapped multi-error | 259 ns, 3 allocs | — |
 | `Count`, `Flatten` | 2–3 ns, 0 allocs | — |
 
 `Wrap` builds the message lazily. This is the right trade-off for servers,

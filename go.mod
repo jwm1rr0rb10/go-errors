@@ -1,3 +1,3 @@
 module github.com/jwm1rr0rb10/go-errors
 
-go 1.27.1
+go 1.21

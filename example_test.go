@@ -64,7 +64,7 @@ func ExampleAs_nonComparableErrors() {
 	// Output: true [name is required]
 }
 
-func ExampleOneline() {
+func ExampleOneLine() {
 	timeout := errors.New("timeout")
 	refused := errors.New("connection refused")
 	err := errors.Wrap(errors.Join(timeout, errors.Wrap(refused, "dial")), "sync failed")

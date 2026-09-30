@@ -11,6 +11,8 @@ jobs:
     strategy:
       matrix:
         go: ["1.21", "stable"]
+    env:
+      GOTOOLCHAIN: local # really test on the matrix version
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

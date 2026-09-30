@@ -87,7 +87,7 @@ func TestFormatFlagsAndVerbs(t *testing.T) {
 	}
 }
 
-func TestOneline(t *testing.T) {
+func TestOneLine(t *testing.T) {
 	timeout := New("timeout")
 	refused := New("connection refused")
 
@@ -116,7 +116,7 @@ func TestOneline(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := OneLine(tt.err); got != tt.want {
-				t.Errorf("Oneline = %q, want %q", got, tt.want)
+				t.Errorf("OneLine = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -127,16 +127,25 @@ type emptyJoin struct{}
 func (emptyJoin) Error() string   { return "empty" }
 func (emptyJoin) Unwrap() []error { return []error{nil} }
 
-func TestOnelinePathological(t *testing.T) {
-	// selfJoin (regression_test.go) returns itself twice from Unwrap:
-	// an unbounded walk would be exponential.
-	s := &selfJoin{}
-	got := OneLine(s)
+func TestOneLinePathological(t *testing.T) {
+	// selfJoin (regression_test.go) returns itself twice from Unwrap.
+	// Foreign multi-errors are rendered by their own message, so this
+	// must not recurse at all.
+	if got := OneLine(&selfJoin{}); got != "self" {
+		t.Fatalf("OneLine(selfJoin) = %q, want %q", got, "self")
+	}
+
+	// A chain deeper than the limit is truncated.
+	deep := New("root")
+	for i := 0; i < 150; i++ {
+		deep = Wrap(deep, "w")
+	}
+	got := OneLine(deep)
 	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("expected truncated output, got %d bytes ending %q", len(got), got[max(0, len(got)-20):])
 	}
 	if strings.ContainsAny(got, "\r\n") {
-		t.Fatal("Oneline produced a line break")
+		t.Fatal("OneLine produced a line break")
 	}
 
 	// Cyclic single-wrap chain from another package.
@@ -144,7 +153,7 @@ func TestOnelinePathological(t *testing.T) {
 	b := &cyclicErr{msg: "b", next: a}
 	a.next = b
 	if got := OneLine(a); got == "" || len(got) > 10_000 {
-		t.Fatalf("Oneline on a cycle returned %d bytes", len(got))
+		t.Fatalf("OneLine on a cycle returned %d bytes", len(got))
 	}
 }
 
@@ -165,6 +174,6 @@ func TestWrapChainNonComparableRoot(t *testing.T) {
 		t.Fatalf("Error() = %q, want %q", got, want)
 	}
 	if got := OneLine(err); got != want {
-		t.Fatalf("Oneline = %q, want %q", got, want)
+		t.Fatalf("OneLine = %q, want %q", got, want)
 	}
 }

@@ -199,9 +199,9 @@ func FuzzErrorTrees(f *testing.F) {
 		checkAsTypeAgrees[fieldErr](t, data, joined)
 		checkAsTypeAgrees[valueWrapper](t, data, joined)
 
-		// Oneline never produces line breaks, whatever the tree looks like.
+		// OneLine never produces line breaks, whatever the tree looks like.
 		if line := OneLine(joined); strings.ContainsAny(line, "\r\n") {
-			t.Fatalf("Oneline produced a line break: %q", line)
+			t.Fatalf("OneLine produced a line break: %q", line)
 		}
 		// Error of a Wrap chain matches the level-by-level definition.
 		if w := Wrap(Wrap(joined, "b"), "a"); joined != nil && w.Error() != "a: b: "+joined.Error() {

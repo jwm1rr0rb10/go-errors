@@ -1,4 +1,4 @@
-// Package errors provide utilities for creating, wrapping, combining,
+// Package errors provides utilities for creating, wrapping, combining,
 // and inspecting errors.
 //
 // It has no dependencies outside the standard library and interoperates
@@ -10,10 +10,12 @@
 // # Errors vs. Leaves
 //
 // Errors returns the items inside a multi-error or stdlib joined error
-// (nested joins are flattened). For a single fmt.Errorf("%w") chain it returns the outer wrapper as
-// one element, not the inner cause.
+// (nested joins are flattened). For a single fmt.Errorf("%w") chain it
+// returns the outer wrapper as one element, not the inner cause. Multi-errors
+// of other types (anything else with Unwrap() []error) are kept as one item,
+// so their type and message are preserved.
 //
-// Leaves return the root causes: it follows both single (%w) and multi
+// Leaves returns the root causes: it follows both single (%w) and multi
 // (Unwrap() []error) wrapping at any depth, so it also finds the causes of a
 // wrapped multi-error. Use it for logging or error reporting.
 //
@@ -21,7 +23,8 @@
 //
 //   - Join flattens nested multi-errors and stdlib joined errors into one
 //     level and returns the error itself (not a wrapper) when only one
-//     non-nil error is given. Errors.Join keeps the nesting.
+//     non-nil error is given. The standard errors.Join keeps the nesting.
+//     Other Unwrap() []error types are not flattened.
 //   - Multi-errors print as "N errors occurred": followed by one line per
 //     error; errors.Join separates messages with newlines only.
 //
@@ -240,8 +243,9 @@ func Wrapf(err error, format string, args ...any) error {
 	return &wrapError{msg: fmt.Sprintf(format, args...), err: err}
 }
 
-// Append combines errors into a multi-error. Nested multi-errors and stdlib
-// joined errors are flattened at any depth; nil errors are skipped. Returns nil
+// Append combines errors into a multi-error. Nested multi-errors of this
+// package and stdlib joined errors are flattened at any depth; other
+// Unwrap() []error types are kept as one item; nil errors are skipped. Returns nil
 // if all errors are nil, and the error itself if only one is non-nil.
 //
 // Appending to a multi-error in a loop (err = Append(err, e)) is amortized
@@ -294,6 +298,14 @@ func Flatten(err error) error {
 	if err == nil {
 		return nil
 	}
+	switch e := err.(type) {
+	case *multiError:
+		return err // always holds at least two errors
+	default:
+		if _, ok := asStdJoin(e); !ok {
+			return err
+		}
+	}
 	switch countOne(err) {
 	case 0:
 		return nil
@@ -320,8 +332,9 @@ func Prefix(err error, prefix string) error {
 	return build(errs)
 }
 
-// Errors return the items inside err. Multi-errors and values produced by
-// errors.Joins are flattened at any depth; wrapped errors are not unwrapped.
+// Errors returns the items inside err. Multi-errors of this package and
+// values produced by errors.Join are flattened at any depth; other
+// Unwrap() []error types and wrapped errors are not unwrapped.
 // A single fmt.Errorf("%w") chain is returned as a one-element slice
 // containing the outer wrapper. Use Leaves to reach root causes.
 // The returned slice is a copy and may be modified.
@@ -329,7 +342,7 @@ func Errors(err error) []error {
 	return appendFlat(nil, err)
 }
 
-// Leaves return the root causes of err: errors that wrap nothing. It
+// Leaves returns the root causes of err: errors that wrap nothing. It
 // follows both Unwrap() error and Unwrap() []error at any depth, so the
 // causes of a wrapped multi-error are found too. Order is depth-first,
 // left to right; nil is never included.
@@ -376,16 +389,17 @@ func WithMessage(err error, msg string) error {
 
 // OneLine renders err on a single line, for plain-text logs and metrics.
 //
-// Multi-errors (this package's and any Unwrap() []error value, including
-// errors.Join) are rendered as their items separated by "; ", wrapped
-// errors as "context: cause", at any depth:
+// Multi-errors (this package's and errors.Join values) are rendered as
+// their items separated by "; ", wrapped errors as "context: cause", at any
+// depth:
 //
 //	Wrap(Join(timeout, Wrap(refused, "dial")), "sync failed")
 //	→ "sync failed: timeout; dial: connection refused"
 //
 // Wrappers from other packages, such as fmt.Errorf("ctx: %w", err), are
 // handled when their message ends with the message of the wrapped error.
-// Any line breaks left in other messages are replaced with "; ". The walk
+// Other Unwrap() []error types are rendered by their own message. Any line
+// breaks left in messages are replaced with "; ". The walk
 // is bounded like Leaves, so cyclic or huge error graphs are safe; output
 // that hits the limit ends with "...". Returns "" for nil.
 func OneLine(err error) string {
@@ -421,6 +435,13 @@ func (o *oneLineWriter) write(err error, depth int) {
 		o.write(e.err, depth+1)
 
 	case multiUnwrapper:
+		if _, ok := err.(*multiError); !ok {
+			if _, ok := asStdJoin(err); !ok {
+				// Another library's multi-error has its own message.
+				o.writeFlat(err.Error())
+				return
+			}
+		}
 		first := true
 		for _, c := range e.Unwrap() {
 			if c == nil {
@@ -570,15 +591,34 @@ func asType[E error](err error, p **E) (E, bool) {
 // Unwrap is errors.Unwrap. It returns nil for multi-errors; use Errors.
 func Unwrap(err error) error { return errors.Unwrap(err) }
 
-// Is are errors.Is.
+// Is is errors.Is.
 func Is(err, target error) bool { return errors.Is(err, target) }
 
-// As are errors.As.
+// As is errors.As.
 func As(err error, target any) bool { return errors.As(err, target) }
 
 // multiUnwrapper is implemented by errors.Join values and multi-errors from
 // other libraries.
 type multiUnwrapper interface{ Unwrap() []error }
+
+// stdJoinType is the dynamic type of errors.Join results (*errors.joinError).
+var stdJoinType = reflect.TypeOf(errors.Join(errors.ErrUnsupported))
+
+// asStdJoin returns err as a multiUnwrapper if it was produced by
+// errors.Join. Only this package's multi-errors and stdlib joined errors are
+// flattened: any other Unwrap() []error type (a validation error, a
+// multi-error from another library, fmt.Errorf with several %w) may carry
+// its own message and fields, so it is kept as one item and stays visible
+// to errors.As.
+func asStdJoin(err error) (multiUnwrapper, bool) {
+	// The interface check is much cheaper than reflect.TypeOf and rules out
+	// plain errors, the common case.
+	u, ok := err.(multiUnwrapper)
+	if !ok || reflect.TypeOf(err) != stdJoinType {
+		return nil, false
+	}
+	return u, true
+}
 
 // countOne returns the number of errors appendFlat would produce for err,
 // without allocating.
@@ -588,10 +628,11 @@ func countOne(err error) int {
 		return 0
 	case *multiError:
 		return len(e.errs)
-	case multiUnwrapper:
-		budget := maxLeavesNodes
-		return countNested(e, 0, &budget)
 	default:
+		if j, ok := asStdJoin(err); ok {
+			budget := maxLeavesNodes
+			return countNested(j, 0, &budget)
+		}
 		return 1
 	}
 }
@@ -607,33 +648,37 @@ func countNested(e multiUnwrapper, depth int, budget *int) int {
 		case nil:
 		case *multiError:
 			n += len(c.errs)
-		case multiUnwrapper:
-			n += countNested(c, depth+1, budget)
 		default:
-			n++
+			if j, ok := asStdJoin(x); ok {
+				n += countNested(j, depth+1, budget)
+			} else {
+				n++
+			}
 		}
 	}
 	return n
 }
 
 // appendFlat appends the non-nil errors of err to dst, flattening nested
-// multi-errors (this package's and any Unwrap() []error value) at any depth.
-// Wrapped errors are not unwrapped: Wrap(Join(a, b), "x") is one item.
+// multi-errors (this package's and errors.Join values) at any depth. Other
+// Unwrap() []error types and wrapped errors are not unwrapped:
+// Wrap(Join(a, b), "x") is one item.
 //
 // This package's multi-errors are always flat (they are only built by
-// appendFlat), so their elements are copied as is. Cyclic or huge foreign
-// multi-errors are bounded by maxUnwrapDepth and maxLeavesNodes; beyond the
-// limits a multi-error is kept as one item.
+// appendFlat), so their elements are copied as is. Huge stdlib joins are
+// bounded by maxUnwrapDepth and maxLeavesNodes; beyond the limits a joined
+// error is kept as one item.
 func appendFlat(dst []error, err error) []error {
 	switch e := err.(type) {
 	case nil:
 		return dst
 	case *multiError:
 		return append(dst, e.errs...)
-	case multiUnwrapper:
-		budget := maxLeavesNodes
-		return appendNested(dst, e, 0, &budget)
 	default:
+		if j, ok := asStdJoin(err); ok {
+			budget := maxLeavesNodes
+			return appendNested(dst, j, 0, &budget)
+		}
 		return append(dst, err)
 	}
 }
@@ -648,10 +693,12 @@ func appendNested(dst []error, e multiUnwrapper, depth int, budget *int) []error
 		case nil:
 		case *multiError:
 			dst = append(dst, c.errs...)
-		case multiUnwrapper:
-			dst = appendNested(dst, c, depth+1, budget)
 		default:
-			dst = append(dst, x)
+			if j, ok := asStdJoin(x); ok {
+				dst = appendNested(dst, j, depth+1, budget)
+			} else {
+				dst = append(dst, x)
+			}
 		}
 	}
 	return dst
@@ -764,7 +811,7 @@ func isPointer(err error) bool {
 func singleChainLeaf(err error) (leaf error, ok bool) {
 	start := err
 	startIsPtr := isPointer(start)
-	for depth := range maxUnwrapDepth {
+	for depth := 0; depth < maxUnwrapDepth; depth++ {
 		switch e := err.(type) {
 		case multiUnwrapper:
 			return nil, false
